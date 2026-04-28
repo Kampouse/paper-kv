@@ -81,6 +81,25 @@ Base: `https://kv.main.fastnear.com`
 
 PnL calculation: `(exitPrice - entryPrice) / entryPrice * leverage * 100` for longs, reversed for shorts.
 
+## Liquidation & Funding
+
+Real perp mechanics — not just a PnL multiplier:
+
+**Liquidation price** (set on open):
+- Long: `entry * (1 - 1/leverage + 0.005)` — 0.005 = maintenance margin
+- Short: `entry * (1 + 1/leverage - 0.005)`
+- Checked every tick against existing price (no extra API call)
+- Liquidated = lose entire collateral, -100% PnL, reason: "liquidated"
+
+**Funding fees**: 0.01% of position size per 8h, prorated per tick.
+
+| Leverage | Liq distance |
+|----------|-------------|
+| 5x       | ~19.5%      |
+| 10x      | ~9.5%       |
+| 25x      | ~3.9%       |
+| 50x      | ~1.5%       |
+
 ## Position/Trade Schema
 
 ```json

@@ -99,6 +99,25 @@ POST https://kv.main.fastnear.com/v0/history/{kv_contract}/{account}
 {"key": "trades", "asc": true, "limit": 100}
 ```
 
+## Leverage, Liquidation & Funding
+
+Positions are opened with configurable leverage. This isn't just a multiplier — it simulates real perp mechanics:
+
+**Liquidation price** (calculated on open):
+- Long: `entry * (1 - 1/leverage + 0.005)`
+- Short: `entry * (1 + 1/leverage - 0.005)`
+
+If price crosses liquidation → position force-closed, lose entire collateral.
+
+| Leverage | Liq distance (from entry) |
+|----------|--------------------------|
+| 5x       | ~19.5%                   |
+| 10x      | ~9.5%                    |
+| 25x      | ~3.9%                    |
+| 50x      | ~1.5%                    |
+
+**Funding fees**: 0.01% of position size per 8h, prorated per tick. Deducted from unrealized PnL continuously.
+
 ## License
 
 MIT
