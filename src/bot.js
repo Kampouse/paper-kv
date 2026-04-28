@@ -263,6 +263,15 @@ class PaperBot {
     const leverage = this.config.defaultLeverage;
     const size = collateral * leverage;
 
+    // Liquidation price: maintenance margin ~0.5%
+    const maintenanceMargin = 0.005;
+    let liquidationPrice;
+    if (direction === "long") {
+      liquidationPrice = price * (1 - 1 / leverage + maintenanceMargin);
+    } else {
+      liquidationPrice = price * (1 + 1 / leverage - maintenanceMargin);
+    }
+
     const position = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       symbol,
@@ -271,12 +280,14 @@ class PaperBot {
       leverage,
       size,
       collateral,
+      liquidationPrice,
+      fundingFeesPaid: 0,
       openedAt: new Date().toISOString(),
     };
 
     this.positions.push(position);
     console.log(
-      `  🟢 OPENED ${direction.toUpperCase()} ${symbol} ${leverage}x | Entry: $${price.toLocaleString()} | Size: $${size.toLocaleString()}`
+      `  🟢 OPENED ${direction.toUpperCase()} ${symbol} ${leverage}x | Entry: $${price.toLocaleString()} | Size: $${size.toLocaleString()} | Liq: $${liquidationPrice.toLocaleString()}`
     );
 
     return position;
@@ -322,6 +333,61 @@ class PaperBot {
     return closed;
   }
 
+  checkLiquidations(prices) {
+    // Funding fee: ~0.01% of position size per 8h
+    // At 60s ticks = 480 ticks per 8h funding period
+    const fundingRate = 0.0001; // 0.01% per 8h
+    const ticksPerPeriod = (8 * 60 * 60) / (this.config.checkInterval / 1000);
+
+    const toClose = [];
+
+    for (const pos of this.positions) {
+      const price = prices.get(pos.symbol);
+      if (!price) continue;
+
+      // Deduct funding fee (proportional to ticks elapsed)
+      const fee = pos.size * fundingRate / ticksPerPeriod;
+      pos.fundingFeesPaid = (pos.fundingFeesPaid || 0) + fee;
+
+      // Check liquidation
+      let liquidated = false;
+      if (pos.direction === "long" && price <= pos.liquidationPrice) {
+        liquidated = true;
+      } else if (pos.direction === "short" && price >= pos.liquidationPrice) {
+        liquidated = true;
+      }
+
+      if (liquidated) {
+        toClose.push({ pos, price, reason: "liquidated" });
+      }
+    }
+
+    for (const { pos, price, reason } of toClose) {
+      // Liquidated = lose entire collateral
+      const idx = this.positions.indexOf(pos);
+      if (idx !== -1) this.positions.splice(idx, 1);
+
+      const closed = {
+        ...pos,
+        exitPrice: price,
+        pnl: -pos.collateral,
+        pnlPct: -100,
+        closedAt: new Date().toISOString(),
+        exitReason: reason,
+      };
+
+      this.state.balance -= pos.collateral;
+      this.state.totalTrades++;
+      this.state.totalPnl -= pos.collateral;
+      this.state.losses++;
+      this.trades.push(closed);
+
+      console.log(
+        `  💀 LIQUIDATED ${pos.direction.toUpperCase()} ${pos.symbol} ${pos.leverage}x | Entry: $${pos.entryPrice.toLocaleString()} → $${price.toLocaleString()} | Liq at: $${pos.liquidationPrice.toLocaleString()} | Lost: $${pos.collateral}`
+      );
+    }
+  }
+
   async runMomentum(prices) {
     for (const symbol of this.config.tradePairs) {
       const price = prices.get(symbol);
@@ -361,6 +427,9 @@ class PaperBot {
       console.log(`  💲 ${sym}: $${price.toLocaleString()}`);
     }
 
+    // Check liquidations + apply funding fees
+    await this.checkLiquidations(prices);
+
     switch (this.config.strategy) {
       case "momentum":
         await this.runMomentum(prices);
@@ -376,8 +445,9 @@ class PaperBot {
             ? ((currentPrice - p.entryPrice) / p.entryPrice) * p.leverage * 100
             : ((p.entryPrice - currentPrice) / p.entryPrice) * p.leverage * 100;
         const emoji = unrealized >= 0 ? "🟢" : "🔴";
+        const fees = (p.fundingFeesPaid || 0).toFixed(2);
         console.log(
-          `    ${emoji} ${p.symbol} ${p.direction.toUpperCase()} ${p.leverage}x | $${p.entryPrice.toLocaleString()} → $${currentPrice.toLocaleString()} | ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)}%`
+          `    ${emoji} ${p.symbol} ${p.direction.toUpperCase()} ${p.leverage}x | $${p.entryPrice.toLocaleString()} → $${currentPrice.toLocaleString()} | ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)}% | Liq: $${p.liquidationPrice.toLocaleString()} | Fees: $${fees}`
         );
       }
     }
