@@ -1,0 +1,14 @@
+{
+  "name": "paper-kv",
+  "version": "1.0.0",
+  "description": "Paper trading bot — Binance prices + NEAR FastData KV storage",
+  "type": "module",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "status": "node src/status.js"
+  },
+  "dependencies": {
+    "near-api-js": "^4.0.0"
+  }
+}
