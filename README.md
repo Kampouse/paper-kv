@@ -49,13 +49,15 @@ For paper-kv, OutLayer provides:
 
 **Important:** While the initial setup and basic usage are free, OutLayer transaction fees may apply depending on usage. Check [dashboard.fastnear.com](https://dashboard.fastnear.com) for current pricing. For heavy usage, you may need to deposit a small amount of NEAR into your OutLayer wallet.
 
-### Step 1: Get an OutLayer wallet
+### Setup for Humans (4 steps)
 
-**Option A — Web (for humans):**
+#### Step 1: Get an OutLayer wallet
+
+**Option A — Web:**
 
 Go to [outlayer.fastnear.com](https://outlayer.fastnear.com) and click **Register**.
 
-**Option B — CLI (for agents/CI):**
+**Option B — CLI:**
 
 ```bash
 curl -s -X POST https://api.outlayer.fastnear.com/register
@@ -67,7 +69,7 @@ Either way you'll get:
 
 No NEAR account, no email, no downloads. 10 seconds.
 
-### Step 2: Fund your wallet (optional)
+#### Step 2: Fund your wallet (optional)
 
 Basic usage is free thanks to trial credits. For 24/7 continuous operation:
 
@@ -77,7 +79,7 @@ Basic usage is free thanks to trial credits. For 24/7 continuous operation:
 
 Check pricing at [dashboard.fastnear.com](https://dashboard.fastnear.com).
 
-### Step 3: Set up auto-approve policy
+#### Step 3: Set up auto-approve policy
 
 In your OutLayer dashboard:
 
@@ -88,32 +90,59 @@ In your OutLayer dashboard:
 
 Without this, you'll need to manually approve each KV write from the dashboard. With it, the bot runs hands-free.
 
-### Step 4: Run the bot
+#### Step 4: Run the bot
 
-**If running manually:**
 ```bash
 export OUTLAYER_API_KEY=wk_your_key_here
 python3 paper_kv.py
 ```
 
-**If running inside an agent (NEAR AI, OpenClaw, etc):**
+---
 
-Store the key in the agent's shell profile so it persists across sessions:
+### Setup for Agents (NEAR AI, OpenClaw, Codex, etc)
+
+If you're an agent with shell access, here's the full setup — no human interaction needed:
 
 ```bash
-# Add to .bashrc or .env
-echo 'export OUTLAYER_API_KEY=wk_your_key_here' >> ~/.bashrc
+# 1. Clone the repo
+git clone https://github.com/Kampouse/paper-kv.git
+cd paper-kv
+
+# 2. Register an OutLayer wallet (get API key)
+RESPONSE=$(curl -s -X POST https://api.outlayer.fastnear.com/register)
+API_KEY=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['api_key'])")
+echo "Your API key: $API_KEY"
+
+# 3. Store it in shell profile so it persists
+echo "export OUTLAYER_API_KEY=$API_KEY" >> ~/.bashrc
 source ~/.bashrc
-```
 
-Then the agent can just run:
-```bash
+# 4. Run the bot
 python3 paper_kv.py
 ```
 
-The `OUTLAYER_API_KEY` environment variable is automatically picked up. No .env file needed.
+That's it — 4 commands, zero human interaction. The API key is stored in `.bashrc` so it survives across sessions.
 
-**For CI/CD** (GitHub Actions, etc), set it as a repository secret and map it to the environment.
+**What you get:**
+- A gasless NEAR wallet (no private keys, secured in TEE)
+- Paper trading with $10,000 starting balance
+- All results publicly verifiable at `https://kv.main.fastnear.com/v0/latest/paper-kv.near/YOUR_ACCOUNT/state`
+
+**Customize before running:**
+```bash
+# Change trade size, leverage, pairs
+export TRADE_SIZE=50
+export DEFAULT_LEVERAGE=3
+export TRADE_PAIRS="BTCUSDT,ETHUSDT,SOLUSDT"
+python3 paper_kv.py
+```
+
+**Run in background:**
+```bash
+nohup python3 paper_kv.py > paper-kv.log 2>&1 &
+```
+
+**Note:** First runs may require policy approval from the OutLayer dashboard. Ask your human to whitelist `paper-kv.near` in the policy settings for fully autonomous operation.
 
 Output:
 ```
