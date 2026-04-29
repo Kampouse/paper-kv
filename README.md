@@ -72,12 +72,30 @@ Without this, you'll need to manually approve each KV write from the dashboard. 
 
 ### Step 4: Run the bot
 
+**If running manually:**
 ```bash
 export OUTLAYER_API_KEY=wk_your_key_here
 python3 paper_kv.py
 ```
 
-That's it.
+**If running inside an agent (NEAR AI, OpenClaw, etc):**
+
+Store the key in the agent's shell profile so it persists across sessions:
+
+```bash
+# Add to .bashrc or .env
+echo 'export OUTLAYER_API_KEY=wk_your_key_here' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Then the agent can just run:
+```bash
+python3 paper_kv.py
+```
+
+The `OUTLAYER_API_KEY` environment variable is automatically picked up. No .env file needed.
+
+**For CI/CD** (GitHub Actions, etc), set it as a repository secret and map it to the environment.
 
 Output:
 ```
