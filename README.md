@@ -12,6 +12,24 @@ Paper trading bot with zero setup. Real Binance prices, results stored on NEAR b
 - Saves all state to NEAR KV (positions, trades, balance)
 - Anyone can verify results via the free KV HTTP API
 
+### Why NEAR FastData KV?
+
+[FastData KV](https://kv.main.fastnear.com) is a free, public key-value storage built on NEAR blockchain. It lets any NEAR contract store JSON data via a simple `__fastdata_kv` function call, and anyone can read it back via a free HTTP API.
+
+Why we use it instead of a database or local files:
+
+- **Publicly verifiable** — your trading history is on-chain. Nobody can accuse you of faking results
+- **Free to read** — no API key needed, just `curl` the URL. Anyone can check your P&L
+- **Cheap to write** — one NEAR contract call per tick (~0.001 NEAR, or gasless via OutLayer)
+- **No server needed** — no database to host, no backend to maintain
+- **Versioned** — every write is timestamped on-chain with full history. You can see every state change
+- **Built for agents** — simple JSON in/out, designed for programs not humans
+
+Write: `__fastdata_kv({"state": {...}, "positions": [...], "trades": [...]})`
+Read: `GET https://kv.main.fastnear.com/v0/latest/paper-kv.near/YOUR_ACCOUNT/state`
+
+[Full KV API docs](https://kv.main.fastnear.com)
+
 ---
 
 ## Quick Start (Python — recommended)
