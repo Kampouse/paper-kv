@@ -12,16 +12,28 @@ Paper trading bot with zero setup. Real Binance prices, results stored on NEAR b
 - Saves all state to NEAR KV (positions, trades, balance)
 - Anyone can verify results via the free KV HTTP API
 
+---
+
 ## Quick Start (Python — recommended)
 
 ### Prerequisites
 
-- Python 3.8+
-- An OutLayer API key (free, gasless — see below)
+- Python 3.8+ (no pip installs needed — stdlib only)
 
-### Step 1: Get an OutLayer API key
+### What is OutLayer?
 
-Register a wallet (one command, no NEAR account needed):
+[OutLayer](https://outlayer.fastnear.com) is a custody service for AI agents built on NEAR. It gives your bot a wallet secured inside a **TEE (Trusted Execution Environment)** — Intel TDX enclave. Your agent authenticates with an API key, but never sees a private key. All transaction signing happens inside the enclave.
+
+For paper-kv, OutLayer provides:
+- **Gasless contract calls** — write to KV without holding NEAR for gas
+- **No private key management** — the API key is the only secret
+- **Policy controls** — set spending limits, whitelist contracts, freeze wallet
+
+**Important:** While the initial setup and basic usage are free, OutLayer transaction fees may apply depending on usage. Check [dashboard.fastnear.com](https://dashboard.fastnear.com) for current pricing. For heavy usage, you may need to deposit a small amount of NEAR into your OutLayer wallet.
+
+### Step 1: Register an OutLayer wallet
+
+One command, no NEAR account or email needed:
 
 ```bash
 curl -s -X POST https://api.outlayer.fastnear.com/register
@@ -36,12 +48,33 @@ Response:
 }
 ```
 
-**Save the `api_key` — it's shown only once.** This gives you a gasless, TEE-secured wallet. No private keys, no NEAR account setup, nothing.
+**Save the `api_key` — it's shown only once.** Store it somewhere safe.
 
-### Step 2: Configure the policy (optional but recommended)
+What you got:
+- `api_key` — your bot's authentication token
+- `near_account_id` — your intents account on NEAR (derived from MPC, not a named account)
+- `handoff_url` — dashboard link to manage your wallet
 
-Open the `handoff_url` in your browser. In the dashboard, update the policy to auto-approve contract calls to `paper-kv.near`:
+### Step 2: (Optional) Fund your wallet
 
+Basic usage (a few trades per hour) is typically free thanks to trial credits. For continuous 24/7 operation, you may want to deposit a small amount of NEAR:
+
+1. Open the `handoff_url` from step 1
+2. Copy your NEAR deposit address
+3. Send a small amount (~0.5 NEAR is plenty for weeks of operation)
+
+Check current pricing at [dashboard.fastnear.com](https://dashboard.fastnear.com).
+
+### Step 3: Configure the policy
+
+Open the `handoff_url` in your browser. In the OutLayer dashboard:
+
+1. Go to **Policy**
+2. Add `paper-kv.near` to the address whitelist
+3. Allow `call` as a transaction type
+4. Save
+
+Example policy:
 ```json
 {
   "rules": {
@@ -49,28 +82,54 @@ Open the `handoff_url` in your browser. In the dashboard, update the policy to a
     "addresses": {
       "mode": "whitelist",
       "list": ["paper-kv.near"]
+    },
+    "limits": {
+      "per_transaction": { "native": "1000000000000000000000000" }
     }
   }
 }
 ```
 
-This lets the bot write to KV without manual approval each time.
+This lets the bot write to KV without manual approval each tick. Without this, every KV write will need your approval from the dashboard.
 
-### Step 3: Run the bot
+### Step 4: Run the bot
 
 ```bash
 export OUTLAYER_API_KEY=wk_your_key_here
 python3 paper_kv.py
 ```
 
-That's it. No npm install, no .env file, no wallet setup.
+That's it. No npm install, no .env file, no wallet setup beyond the API key.
+
+Output:
+```
+╔═══════════════════════════════════════════════╗
+║   paper-kv — Paper Trading Bot (Python)       ║
+║   Binance prices + NEAR KV via OutLayer       ║
+╚═══════════════════════════════════════════════╝
+
+  Account:    5c571cf253c3edb672df...
+  KV store:   paper-kv.near
+  Strategy:   momentum
+  Leverage:   5.0x
+  Trade size: $100.0
+  Pairs:      BTCUSDT, ETHUSDT, SOLUSDT, NEARUSDT
+
+── Loading state from KV ──
+  New account — starting with $10000.0
+  BTCUSDT: $76,978.05
+  ETHUSDT: $2,305.99
+  ...
+
+▶  Running every 60s (Ctrl+C to stop)
+```
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OUTLAYER_API_KEY` | — | OutLayer API key (gasless writes) |
-| `NEAR_ACCOUNT` | auto | Override account (uses OutLayer account by default) |
+| `NEAR_ACCOUNT` | auto-detected | Override account (uses OutLayer account by default) |
 | `KV_CONTRACT` | `paper-kv.near` | KV storage contract |
 | `INITIAL_BALANCE` | `10000` | Starting paper balance (USD) |
 | `TRADE_SIZE` | `100` | USD collateral per trade |
@@ -87,6 +146,17 @@ Example with custom settings:
 OUTLAYER_API_KEY=wk_... TRADE_SIZE=50 DEFAULT_LEVERAGE=3 INITIAL_BALANCE=5000 python3 paper_kv.py
 ```
 
+### Fallback: Using with a NEAR account instead of OutLayer
+
+If you already have a NEAR account with a local keychain setup (near-cli-rs), you can skip OutLayer:
+
+```bash
+export NEAR_ACCOUNT=your-account.near
+python3 paper_kv.py
+```
+
+This uses `near contract call-function` under the hood. Costs ~0.001 NEAR per KV write. Requires [near-cli-rs](https://docs.near.org/tools/near-cli-rs) installed and a keychain set up.
+
 ---
 
 ## Quick Start (Node.js — original)
@@ -99,6 +169,8 @@ OUTLAYER_API_KEY=wk_... TRADE_SIZE=50 DEFAULT_LEVERAGE=3 INITIAL_BALANCE=5000 py
 ### Step 1: Install
 
 ```bash
+git clone https://github.com/Kampouse/paper-kv.git
+cd paper-kv
 npm install
 ```
 
@@ -128,33 +200,57 @@ npm start
 
 ## View Results (no wallet needed)
 
+Anyone can verify your trading results — reads are free, no authentication:
+
 ```bash
-# View your own (Python — use the account ID from register)
-curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/YOUR_ACCOUNT_ID/state
+# View state (balance, trades, PnL)
+curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/ACCOUNT_ID/state
 
-# View anyone's
-curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/jemartel.near/state
+# View open positions
+curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/ACCOUNT_ID/positions
 
-# Get trade history
-curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/jemartel.near/trades
+# View trade history
+curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/ACCOUNT_ID/trades
+
+# Full history with timestamps
+curl -s -X POST https://kv.main.fastnear.com/v0/history/paper-kv.near/ACCOUNT_ID \
+  -H "Content-Type: application/json" \
+  -d '{"key":"trades","asc":true,"limit":100}'
 ```
+
+Replace `ACCOUNT_ID` with the Near account ID (for Node.js) or intents account ID (for Python/OutLayer).
+
+---
 
 ## Architecture
 
 ```
-Python version:
-  paper_kv.py   — bot logic + OutLayer KV writes (no deps)
+Python version (zero deps):
+  paper_kv.py — bot logic + OutLayer gasless KV writes
 
 Node.js version:
   src/bot.js    — bot logic + near-api-js KV writes
-  src/status.js — read-only viewer
+  src/status.js — read-only viewer (no wallet needed)
 ```
 
-**Price feed**: Binance public API — `api.binance.com/api/v3/ticker/price` — no API key needed
+**Price feed**: Binance public API (`api.binance.com/api/v3/ticker/price`) — no API key, ~225ms batch
 
-**Storage (Python)**: OutLayer Agent Custody — gasless contract calls to `paper-kv.near`'s `__fastdata_kv`. Keys stored in TEE, no private key exposure.
+**Storage (Python)**: OutLayer Agent Custody → `POST /wallet/v1/call` → calls `__fastdata_kv` on `paper-kv.near`. Transaction signing happens inside Intel TDX enclave. Agent never has the private key.
 
-**Storage (Node.js)**: NEAR account + near-api-js — direct function call, costs ~0.001 NEAR per write.
+**Storage (Node.js)**: NEAR account + near-api-js → direct function call to `__fastdata_kv`. Costs ~0.001 NEAR per write.
+
+```
+┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
+│ Binance  │────▶│  Python bot  │────▶│  OutLayer    │────▶│ NEAR KV  │
+│ (prices) │     │  (strategy)  │     │  (TEE sign)  │     │ (public) │
+└──────────┘     └──────────────┘     └──────────────┘     └──────────┘
+                                            │
+                                     ┌──────┴──────┐
+                                     │  Policy     │
+                                     │  (limits,   │
+                                     │  whitelist) │
+                                     └─────────────┘
+```
 
 ## KV Storage Layout
 
@@ -198,6 +294,7 @@ Positions simulate real perp mechanics:
 | KV writes | OutLayer (gasless, TEE) | NEAR account (costs gas) |
 | Private key needed | ❌ No | ✅ Yes |
 | Setup time | 30 seconds | 5 minutes |
+| Cost | Free tier + small NEAR for heavy use | ~0.001 NEAR per write |
 | Best for | Quick start, CI/CD, agents | Full control, custom chains |
 
 ## License
