@@ -33,22 +33,21 @@ For paper-kv, OutLayer provides:
 
 ### Step 1: Get an OutLayer wallet
 
+**Option A — Web (for humans):**
+
 Go to [outlayer.fastnear.com](https://outlayer.fastnear.com) and click **Register**.
 
-You'll get:
-- An **API key** (`wk_...`) — save this, it's shown only once
-- A **wallet dashboard** — manage policy, view transactions, deposit funds
-
-No NEAR account, no email, no downloads. 10 seconds.
-
-<details>
-<summary>Or via command line</summary>
+**Option B — CLI (for agents/CI):**
 
 ```bash
 curl -s -X POST https://api.outlayer.fastnear.com/register
 ```
 
-</details>
+Either way you'll get:
+- An **API key** (`wk_...`) — save this, it's shown only once
+- A **wallet dashboard** URL — manage policy, view transactions, deposit funds
+
+No NEAR account, no email, no downloads. 10 seconds.
 
 ### Step 2: Fund your wallet (optional)
 
