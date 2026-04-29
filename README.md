@@ -31,66 +31,45 @@ For paper-kv, OutLayer provides:
 
 **Important:** While the initial setup and basic usage are free, OutLayer transaction fees may apply depending on usage. Check [dashboard.fastnear.com](https://dashboard.fastnear.com) for current pricing. For heavy usage, you may need to deposit a small amount of NEAR into your OutLayer wallet.
 
-### Step 1: Register an OutLayer wallet
+### Step 1: Get an OutLayer wallet
 
-One command, no NEAR account or email needed:
+Go to [outlayer.fastnear.com](https://outlayer.fastnear.com) and click **Register**.
+
+You'll get:
+- An **API key** (`wk_...`) — save this, it's shown only once
+- A **wallet dashboard** — manage policy, view transactions, deposit funds
+
+No NEAR account, no email, no downloads. 10 seconds.
+
+<details>
+<summary>Or via command line</summary>
 
 ```bash
 curl -s -X POST https://api.outlayer.fastnear.com/register
 ```
 
-Response:
-```json
-{
-  "api_key": "wk_15807dbda492...",
-  "near_account_id": "36842e2f73d0b7...",
-  "handoff_url": "https://outlayer.fastnear.com/wallet?key=wk_..."
-}
-```
+</details>
 
-**Save the `api_key` — it's shown only once.** Store it somewhere safe.
+### Step 2: Fund your wallet (optional)
 
-What you got:
-- `api_key` — your bot's authentication token
-- `near_account_id` — your intents account on NEAR (derived from MPC, not a named account)
-- `handoff_url` — dashboard link to manage your wallet
+Basic usage is free thanks to trial credits. For 24/7 continuous operation:
 
-### Step 2: (Optional) Fund your wallet
-
-Basic usage (a few trades per hour) is typically free thanks to trial credits. For continuous 24/7 operation, you may want to deposit a small amount of NEAR:
-
-1. Open the `handoff_url` from step 1
+1. Open your OutLayer dashboard
 2. Copy your NEAR deposit address
-3. Send a small amount (~0.5 NEAR is plenty for weeks of operation)
+3. Send ~0.5 NEAR (lasts weeks at 1 write/minute)
 
-Check current pricing at [dashboard.fastnear.com](https://dashboard.fastnear.com).
+Check pricing at [dashboard.fastnear.com](https://dashboard.fastnear.com).
 
-### Step 3: Configure the policy
+### Step 3: Set up auto-approve policy
 
-Open the `handoff_url` in your browser. In the OutLayer dashboard:
+In your OutLayer dashboard:
 
 1. Go to **Policy**
-2. Add `paper-kv.near` to the address whitelist
-3. Allow `call` as a transaction type
+2. Add `paper-kv.near` to the **address whitelist**
+3. Allow **`call`** as a transaction type
 4. Save
 
-Example policy:
-```json
-{
-  "rules": {
-    "transaction_types": ["call", "intents_swap", "intents_deposit"],
-    "addresses": {
-      "mode": "whitelist",
-      "list": ["paper-kv.near"]
-    },
-    "limits": {
-      "per_transaction": { "native": "1000000000000000000000000" }
-    }
-  }
-}
-```
-
-This lets the bot write to KV without manual approval each tick. Without this, every KV write will need your approval from the dashboard.
+Without this, you'll need to manually approve each KV write from the dashboard. With it, the bot runs hands-free.
 
 ### Step 4: Run the bot
 
@@ -99,7 +78,7 @@ export OUTLAYER_API_KEY=wk_your_key_here
 python3 paper_kv.py
 ```
 
-That's it. No npm install, no .env file, no wallet setup beyond the API key.
+That's it.
 
 Output:
 ```
