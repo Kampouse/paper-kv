@@ -7,6 +7,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 
+const MAX_TRADES_HISTORY = 500;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -241,6 +243,10 @@ class PaperBot {
   }
 
   async saveState() {
+    // Trim trades history to prevent unbounded KV growth
+    if (this.trades.length > MAX_TRADES_HISTORY) {
+      this.trades = this.trades.slice(-MAX_TRADES_HISTORY);
+    }
     await this.kv.putBatch({
       state: this.state,
       positions: this.positions,
@@ -251,6 +257,11 @@ class PaperBot {
   openPosition(symbol, direction, price) {
     if (this.positions.length >= this.config.maxOpenTrades) {
       console.log(`  ⏸️  Max positions (${this.config.maxOpenTrades})`);
+      return null;
+    }
+
+    if (this.config.tradeSize > this.state.balance) {
+      console.log(`  ⏸️  Insufficient balance ($${this.state.balance.toFixed(2)})`);
       return null;
     }
 
@@ -462,6 +473,10 @@ class PaperBot {
     this.running = true;
 
     console.log(`▶  Running every ${this.config.checkInterval / 1000}s (Ctrl+C to stop)\n`);
+
+    // Seed a second price point so momentum has 2 data points on first tick
+    await new Promise(r => setTimeout(r, 2000));
+    await this.priceFeed.fetchPrices(this.config.tradePairs);
 
     await this.tick();
 

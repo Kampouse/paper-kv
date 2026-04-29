@@ -7,13 +7,13 @@ No private keys needed. Uses OutLayer TEE-secured wallet for all writes.
 """
 
 import json, urllib.request, time, os, sys, signal, subprocess, base64
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
 CONFIG = {
     "outlayer_api_key": os.environ.get("OUTLAYER_API_KEY", ""),
-    "outlayer_api": "https://api.outlayer.fastnear.com",
+    "outlayer_api": os.environ.get("OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"),
     "near_account": os.environ.get("NEAR_ACCOUNT", ""),
     "kv_contract": os.environ.get("KV_CONTRACT", "paper-kv.near"),
     "initial_balance": float(os.environ.get("INITIAL_BALANCE", "10000")),
@@ -28,6 +28,7 @@ CONFIG = {
 }
 
 KV_READ_BASE = "https://kv.main.fastnear.com"
+MAX_TRADES_HISTORY = 500
 
 # ── KV Client ───────────────────────────────────────────────────────────────
 
@@ -193,7 +194,8 @@ class PaperBot:
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read())
             return data.get("account_id", "unknown")
-        except:
+        except Exception as err:
+            print(f"  ⚠️  Failed to get account from OutLayer: {err}")
             return "unknown"
 
     def init(self):
@@ -239,6 +241,9 @@ class PaperBot:
     def _save_state(self):
         if not self._dirty:
             return
+        # FIX 3: Trim trades history to prevent unbounded KV growth
+        if len(self.trades) > MAX_TRADES_HISTORY:
+            self.trades = self.trades[-MAX_TRADES_HISTORY:]
         kv_write_batch(self.account, self.contract, {
             "state": self.state,
             "positions": self.positions,
@@ -250,6 +255,11 @@ class PaperBot:
         if len(self.positions) >= self.config["max_open_trades"]:
             return None
         if any(p["symbol"] == symbol and p["direction"] == direction for p in self.positions):
+            return None
+
+        # FIX 2: Check balance before opening
+        if self.config["trade_size"] > self.state["balance"]:
+            print(f"  ⏸️  Insufficient balance (${self.state['balance']:.2f})")
             return None
 
         collateral = self.config["trade_size"]
@@ -268,7 +278,8 @@ class PaperBot:
             "entryPrice": price, "leverage": leverage,
             "size": size, "collateral": collateral,
             "liquidationPrice": liq, "fundingFeesPaid": 0,
-            "openedAt": datetime.utcnow().isoformat() + "Z",
+            # FIX 4: Use timezone-aware UTC instead of deprecated .utcnow()
+            "openedAt": datetime.now(timezone.utc).isoformat(),
         }
         self.positions.append(pos)
         self._dirty = True
@@ -286,7 +297,8 @@ class PaperBot:
 
         closed = {**pos, "exitPrice": price, "pnl": round(pnl, 2),
                   "pnlPct": round(pnl_pct, 2),
-                  "closedAt": datetime.utcnow().isoformat() + "Z",
+                  # FIX 4: timezone-aware UTC
+                  "closedAt": datetime.now(timezone.utc).isoformat(),
                   "exitReason": reason}
 
         self.state["balance"] += pnl
@@ -312,9 +324,14 @@ class PaperBot:
                (pos["direction"] == "short" and price >= pos["liquidationPrice"]):
                 to_close.append((pos, price))
         for pos, price in to_close:
+            # FIX 6: Guard against double-remove when concurrent liquidations fire
+            if pos not in self.positions:
+                continue
             self.positions.remove(pos)
             closed = {**pos, "exitPrice": price, "pnl": -pos["collateral"],
-                      "pnlPct": -100, "closedAt": datetime.utcnow().isoformat() + "Z",
+                      "pnlPct": -100,
+                      # FIX 4: timezone-aware UTC
+                      "closedAt": datetime.now(timezone.utc).isoformat(),
                       "exitReason": "liquidated"}
             self.state["balance"] -= pos["collateral"]
             self.state["totalTrades"] += 1
@@ -347,7 +364,8 @@ class PaperBot:
                     self._close_position(existing, price, "momentum_reversal")
 
     def tick(self):
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        # FIX 4: timezone-aware UTC
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         print(f"\n── {now} ──")
 
         prices = self.price_feed.fetch_prices(self.config["trade_pairs"])
@@ -394,14 +412,20 @@ class PaperBot:
             sys.exit(0)
 
         signal.signal(signal.SIGINT, shutdown)
+
+        # FIX 1: Seed a second price point so momentum has 2 data points on first tick
+        time.sleep(2)
+        self.price_feed.fetch_prices(self.config["trade_pairs"])
+
         self.tick()
 
         while self.running:
             time.sleep(interval)
             try:
                 self.tick()
-            except Exception as e:
-                print(f"  ❌ Tick error: {e}")
+            # FIX 5: Catch specific Exception instead of bare except
+            except Exception as err:
+                print(f"  ❌ Tick error: {err}")
 
 if __name__ == "__main__":
     if not CONFIG["outlayer_api_key"] and not CONFIG["near_account"]:
