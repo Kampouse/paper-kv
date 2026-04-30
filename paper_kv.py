@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 paper-kv — Python bot, gasless KV writes via OutLayer Agent Custody
-Binance prices for signals, NEAR FastData KV for persistent storage.
+NEAR Intents prices for signals, NEAR FastData KV for persistent storage.
 
 No private keys needed. Uses OutLayer TEE-secured wallet for all writes.
 """
 
-import json, urllib.request, time, os, sys, signal, subprocess, base64
+import json, urllib.request, time, os, sys, signal, subprocess, base64, hashlib
 from datetime import datetime, timezone
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -24,10 +24,14 @@ CONFIG = {
     "strategy": os.environ.get("STRATEGY", "momentum"),
     "momentum_lookback_min": int(os.environ.get("MOMENTUM_LOOKBACK_MINUTES", "30")),
     "momentum_threshold_pct": float(os.environ.get("MOMENTUM_THRESHOLD_PCT", "0.5")),
-    "trade_pairs": os.environ.get("TRADE_PAIRS", "BTCUSDT,ETHUSDT,SOLUSDT,NEARUSDT").split(","),
+    # NEAR Intents symbols — maps to Intents API token symbols
+    # Supported: wNEAR, BTC, ETH, SOL, USDC, USDT, and many more
+    # See full list: curl https://1click.chaindefuser.com/v0/tokens
+    "trade_pairs": os.environ.get("TRADE_PAIRS", "BTC,ETH,SOL,wNEAR").split(","),
 }
 
 KV_READ_BASE = "https://kv.main.fastnear.com"
+INTENTS_TOKENS_URL = "https://1click.chaindefuser.com/v0/tokens"
 MAX_TRADES_HISTORY = 500
 
 # ── KV Client ───────────────────────────────────────────────────────────────
@@ -36,7 +40,7 @@ def kv_get(account, contract, key):
     """Read from KV via HTTP (free, no auth)."""
     try:
         url = f"{KV_READ_BASE}/v0/latest/{contract}/{account}/{key}"
-        req = urllib.request.Request(url, headers={"User-Agent": "paper-kv/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "paper-kv/2.0"})
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read())
         entries = data.get("entries", [])
@@ -82,10 +86,14 @@ def _kv_write_outlayer(contract, data_dict, api_key, api_base):
         result = json.loads(resp.read())
         status = result.get("status", "unknown")
         if status == "pending_approval":
-            print(f"  ⏳ KV write pending approval")
+            print(f"  ⏳ KV write pending approval (wallet needs auto-approve policy)")
+            return False
+        if status == "success":
+            print(f"  ✅ KV saved via Outlayer ({len(data_dict)} keys)")
             return True
-        print(f"  ✅ KV saved via Outlayer ({len(data_dict)} keys)")
-        return True
+        # Unknown status — treat as failure
+        print(f"  ⚠️  KV write returned unexpected status: {status}")
+        return False
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:200]
         print(f"  ⚠️  KV write failed (HTTP {e.code}): {body}")
@@ -118,29 +126,71 @@ def _kv_write_cli(account, contract, data_dict):
         print(f"  ⚠️  KV write error: {e}")
         return False
 
-# ── Price Feed ──────────────────────────────────────────────────────────────
+# ── Price Feed (NEAR Intents) ──────────────────────────────────────────────
 
 class PriceFeed:
+    """Price feed from NEAR Intents 1Click API — no API key needed."""
+
     def __init__(self):
-        self.cache = {}
+        self.cache = {}       # symbol -> [{ts, price}, ...]
+        self._token_map = {}  # symbol -> {assetId, blockchain, decimals}
+        self._last_fetch = 0  # timestamp of last full token list fetch
+        self._token_ttl = 300 # re-fetch token list every 5 min
+
+    def _fetch_token_map(self):
+        """Fetch the full supported token list and build symbol -> price map."""
+        try:
+            req = urllib.request.Request(
+                INTENTS_TOKENS_URL,
+                headers={"User-Agent": "paper-kv/2.0"}
+            )
+            resp = urllib.request.urlopen(req, timeout=15)
+            tokens = json.loads(resp.read())
+            # Build map: prefer NEAR-native tokens, then first-seen
+            for t in tokens:
+                sym = t["symbol"]
+                price = t.get("price", 0)
+                if price <= 0:
+                    continue  # skip zero-price tokens
+                # Prefer NEAR-native tokens over bridged
+                existing = self._token_map.get(sym)
+                if existing and existing.get("_blockchain") == "near":
+                    continue  # keep existing near-native
+                if existing is None or t["blockchain"] == "near":
+                    self._token_map[sym] = {
+                        "assetId": t["assetId"],
+                        "blockchain": t["blockchain"],
+                        "decimals": t["decimals"],
+                        "_price": price,
+                    }
+            self._last_fetch = int(time.time())
+        except Exception as e:
+            print(f"  ⚠️  NEAR Intents token fetch failed: {e}")
 
     def fetch_prices(self, symbols):
+        """Fetch prices for given symbols from NEAR Intents API."""
         prices = {}
-        try:
-            url = f"https://api.binance.com/api/v3/ticker/price?symbols=%5B{('%2C'.join(f'%22{s}%22' for s in symbols))}%5D"
-            req = urllib.request.Request(url, headers={"User-Agent": "paper-kv/1.0"})
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            for d in data:
-                price = float(d["price"])
-                symbol = d["symbol"]
-                prices[symbol] = price
-                pts = self.cache.get(symbol, [])
-                pts.append({"ts": int(time.time() * 1000), "price": price})
-                cutoff = int(time.time() * 1000) - 4 * 60 * 60 * 1000
-                self.cache[symbol] = [p for p in pts if p["ts"] >= cutoff]
-        except Exception as e:
-            print(f"  ⚠️  Binance fetch failed: {e}")
+        now = int(time.time())
+
+        # Refresh token list if stale
+        if now - self._last_fetch > self._token_ttl or not self._token_map:
+            self._fetch_token_map()
+
+        ts = int(time.time() * 1000)
+        for sym in symbols:
+            entry = self._token_map.get(sym)
+            if not entry:
+                continue
+            price = entry["_price"]
+            if price <= 0:
+                continue
+            prices[sym] = price
+            # Update history cache for momentum calculations
+            pts = self.cache.get(sym, [])
+            pts.append({"ts": ts, "price": price})
+            cutoff = ts - 4 * 60 * 60 * 1000
+            self.cache[sym] = [p for p in pts if p["ts"] >= cutoff]
+
         return prices
 
     def get_momentum(self, symbol, lookback_min):
@@ -159,6 +209,175 @@ class PriceFeed:
             "change": change,
             "dir": "up" if change > 0.2 else "down" if change < -0.2 else "flat",
         }
+
+    def list_supported_tokens(self):
+        """Return list of all supported token symbols with prices."""
+        if not self._token_map:
+            self._fetch_token_map()
+        return [
+            {"symbol": sym, "blockchain": v["blockchain"], "price": v["_price"]}
+            for sym, v in sorted(self._token_map.items())
+            if v["_price"] > 0
+        ]
+
+# ── System Integrity ────────────────────────────────────────────────────────
+
+class IntegrityChecker:
+    """Verify system health: API reachability, KV connectivity, price feed, state consistency."""
+
+    def __init__(self, bot):
+        self.bot = bot
+        self.checks = []
+
+    def _check(self, name, ok, detail=""):
+        status = "✅" if ok else "❌"
+        msg = f"  {status} {name}"
+        if detail:
+            msg += f" — {detail}"
+        print(msg)
+        self.checks.append({"name": name, "ok": ok, "detail": detail})
+        return ok
+
+    def run(self):
+        """Run all integrity checks, return True if all pass."""
+        print("\n── System Integrity Check ──")
+        all_ok = True
+
+        # 1. NEAR Intents API reachable
+        try:
+            req = urllib.request.Request(
+                INTENTS_TOKENS_URL,
+                headers={"User-Agent": "paper-kv/2.0"}
+            )
+            resp = urllib.request.urlopen(req, timeout=10)
+            tokens = json.loads(resp.read())
+            token_count = len(tokens)
+            self._check("NEAR Intents API", token_count > 0,
+                        f"{token_count} tokens available")
+        except Exception as e:
+            all_ok = False
+            self._check("NEAR Intents API", False, str(e))
+
+        # 2. KV read endpoint reachable
+        try:
+            url = f"{KV_READ_BASE}/v0/latest/{self.bot.contract}/{self.bot.account}/state"
+            req = urllib.request.Request(url, headers={"User-Agent": "paper-kv/2.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            self._check("KV Read API", True, "reachable")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                self._check("KV Read API", True, "reachable (no data yet)")
+            else:
+                all_ok = False
+                self._check("KV Read API", False, f"HTTP {e.code}")
+        except Exception as e:
+            all_ok = False
+            self._check("KV Read API", False, str(e))
+
+        # 3. Price feed returns data for configured pairs
+        prices = self.bot.price_feed.fetch_prices(self.bot.config["trade_pairs"])
+        found = len(prices)
+        expected = len(self.bot.config["trade_pairs"])
+        if found < expected:
+            missing = [s for s in self.bot.config["trade_pairs"] if s not in prices]
+            all_ok = False
+            self._check("Price Feed", False, f"{found}/{expected} pairs — missing: {', '.join(missing)}")
+        else:
+            sample = next(iter(prices.items()))
+            self._check("Price Feed", True, f"{found}/{expected} pairs — {sample[0]}: ${sample[1]:,.2f}")
+
+        # 4. OutLayer API key configured
+        if self.bot.api_key:
+            try:
+                req = urllib.request.Request(
+                    f"{self.bot.api_base}/wallet/v1/balance?token=wrap.near&source=intents",
+                    headers={"Authorization": f"Bearer {self.bot.api_key}"}
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                data = json.loads(resp.read())
+                acct = data.get("account_id", "unknown")
+                self._check("OutLayer Auth", True, f"account: {acct}")
+            except Exception as e:
+                all_ok = False
+                self._check("OutLayer Auth", False, str(e))
+        else:
+            all_ok = False
+            self._check("OutLayer Auth", False, "no API key set")
+
+        # 5. State consistency: balance non-negative, no negative PnL overflow
+        state = self.bot.state
+        issues = []
+        if state["balance"] < 0:
+            issues.append(f"negative balance: ${state['balance']:.2f}")
+        if state["totalTrades"] != state["wins"] + state["losses"]:
+            issues.append(f"trade count mismatch: {state['totalTrades']} vs {state['wins']+state['losses']}")
+        if state["totalPnl"] < -self.bot.config["initial_balance"] * 2:
+            issues.append(f"suspicious PnL: ${state['totalPnl']:.2f}")
+        self._check("State Consistency", len(issues) == 0,
+                    "; ".join(issues) if issues else "clean")
+
+        # 6. Open positions: validate structure and liquidation math
+        pos_issues = []
+        for p in self.bot.positions:
+            if "symbol" not in p or "entryPrice" not in p:
+                pos_issues.append(f"malformed position: {p.get('id', '?')}")
+                continue
+            # Verify liquidation price math
+            lev = p.get("leverage", self.bot.config["default_leverage"])
+            entry = p["entryPrice"]
+            expected_liq_long = entry * (1 - 1 / lev + 0.005)
+            expected_liq_short = entry * (1 + 1 / lev - 0.005)
+            actual = p.get("liquidationPrice", 0)
+            if p["direction"] == "long" and abs(actual - expected_liq_long) > 0.01:
+                pos_issues.append(f"{p['symbol']} long liq mismatch: {actual} vs {expected_liq_long:.2f}")
+            elif p["direction"] == "short" and abs(actual - expected_liq_short) > 0.01:
+                pos_issues.append(f"{p['symbol']} short liq mismatch: {actual} vs {expected_liq_short:.2f}")
+        self._check("Position Validation", len(pos_issues) == 0,
+                    "; ".join(pos_issues) if pos_issues else f"{len(self.bot.positions)} positions valid")
+
+        # 7. KV write roundtrip: write a probe value, read it back, confirm match
+        if not self.bot.api_key:
+            self._check("KV Write Roundtrip", False, "no OutLayer key, cannot test")
+        else:
+            probe_key = "_integrity_probe"
+            probe_val = {"ts": int(time.time()), "v": "ok"}
+            try:
+                write_ok = kv_write_batch(
+                    self.bot.account, self.bot.contract,
+                    {probe_key: probe_val},
+                    api_key=self.bot.api_key, api_base=self.bot.api_base,
+                )
+            except Exception as write_err:
+                write_ok = False
+                write_err_msg = str(write_err)
+
+            if not write_ok:
+                all_ok = False
+                self._check("KV Write Roundtrip", False,
+                            "write failed — wallet may need funding or auto-approve policy (see README)")
+            else:
+                # Wait for propagation and read back
+                time.sleep(5)
+                read_back = kv_get(self.bot.account, self.bot.contract, probe_key)
+                if read_back is None:
+                    all_ok = False
+                    self._check("KV Write Roundtrip", False,
+                                "write succeeded but read returned null — "
+                                "KV propagation may be slow or write was not finalized")
+                elif read_back.get("v") != probe_val["v"]:
+                    all_ok = False
+                    self._check("KV Write Roundtrip", False,
+                                f"value mismatch: wrote {probe_val}, read {read_back}")
+                else:
+                    self._check("KV Write Roundtrip", True, "write → read verified")
+
+        # Summary
+        passed = sum(1 for c in self.checks if c["ok"])
+        total = len(self.checks)
+        emoji = "✅" if all_ok else "❌"
+        print(f"\n  {emoji} {passed}/{total} checks passed")
+        return all_ok
 
 # ── Bot ─────────────────────────────────────────────────────────────────────
 
@@ -198,10 +417,15 @@ class PaperBot:
             print(f"  ⚠️  Failed to get account from OutLayer: {err}")
             return "unknown"
 
+    def verify_integrity(self):
+        """Run system integrity checks."""
+        checker = IntegrityChecker(self)
+        return checker.run()
+
     def init(self):
         print("╔═══════════════════════════════════════════════╗")
         print("║   paper-kv — Paper Trading Bot (Python)       ║")
-        print("║   Binance prices + NEAR KV via OutLayer       ║")
+        print("║   NEAR Intents prices + NEAR KV via OutLayer  ║")
         print("╚═══════════════════════════════════════════════╝")
         print()
         print(f"  Account:    {self.account}")
@@ -241,7 +465,7 @@ class PaperBot:
     def _save_state(self):
         if not self._dirty:
             return
-        # FIX 3: Trim trades history to prevent unbounded KV growth
+        # Trim trades history to prevent unbounded KV growth
         if len(self.trades) > MAX_TRADES_HISTORY:
             self.trades = self.trades[-MAX_TRADES_HISTORY:]
         kv_write_batch(self.account, self.contract, {
@@ -257,7 +481,7 @@ class PaperBot:
         if any(p["symbol"] == symbol and p["direction"] == direction for p in self.positions):
             return None
 
-        # FIX 2: Check balance before opening
+        # Check balance before opening
         if self.config["trade_size"] > self.state["balance"]:
             print(f"  ⏸️  Insufficient balance (${self.state['balance']:.2f})")
             return None
@@ -278,7 +502,6 @@ class PaperBot:
             "entryPrice": price, "leverage": leverage,
             "size": size, "collateral": collateral,
             "liquidationPrice": liq, "fundingFeesPaid": 0,
-            # FIX 4: Use timezone-aware UTC instead of deprecated .utcnow()
             "openedAt": datetime.now(timezone.utc).isoformat(),
         }
         self.positions.append(pos)
@@ -297,7 +520,6 @@ class PaperBot:
 
         closed = {**pos, "exitPrice": price, "pnl": round(pnl, 2),
                   "pnlPct": round(pnl_pct, 2),
-                  # FIX 4: timezone-aware UTC
                   "closedAt": datetime.now(timezone.utc).isoformat(),
                   "exitReason": reason}
 
@@ -324,13 +546,12 @@ class PaperBot:
                (pos["direction"] == "short" and price >= pos["liquidationPrice"]):
                 to_close.append((pos, price))
         for pos, price in to_close:
-            # FIX 6: Guard against double-remove when concurrent liquidations fire
+            # Guard against double-remove when concurrent liquidations fire
             if pos not in self.positions:
                 continue
             self.positions.remove(pos)
             closed = {**pos, "exitPrice": price, "pnl": -pos["collateral"],
                       "pnlPct": -100,
-                      # FIX 4: timezone-aware UTC
                       "closedAt": datetime.now(timezone.utc).isoformat(),
                       "exitReason": "liquidated"}
             self.state["balance"] -= pos["collateral"]
@@ -364,7 +585,6 @@ class PaperBot:
                     self._close_position(existing, price, "momentum_reversal")
 
     def tick(self):
-        # FIX 4: timezone-aware UTC
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         print(f"\n── {now} ──")
 
@@ -413,7 +633,7 @@ class PaperBot:
 
         signal.signal(signal.SIGINT, shutdown)
 
-        # FIX 1: Seed a second price point so momentum has 2 data points on first tick
+        # Seed a second price point so momentum has 2 data points on first tick
         time.sleep(2)
         self.price_feed.fetch_prices(self.config["trade_pairs"])
 
@@ -423,15 +643,76 @@ class PaperBot:
             time.sleep(interval)
             try:
                 self.tick()
-            # FIX 5: Catch specific Exception instead of bare except
             except Exception as err:
                 print(f"  ❌ Tick error: {err}")
 
 if __name__ == "__main__":
-    if not CONFIG["outlayer_api_key"] and not CONFIG["near_account"]:
-        print("❌ Set OUTLAYER_API_KEY or NEAR_ACCOUNT")
-        print("   export OUTLAYER_API_KEY=wk_...  (recommended, gasless)")
-        print("   export NEAR_ACCOUNT=you.near     (fallback, needs local keychain)")
-        sys.exit(1)
-    bot = PaperBot(CONFIG)
-    bot.start()
+    args = sys.argv[1:]
+    subcommand = args[0] if args else None
+
+    if subcommand == "verify":
+        # Integrity check mode — just run checks and exit
+        bot = PaperBot(CONFIG)
+        bot.account = CONFIG["near_account"] or "unknown"
+        if not bot.account and CONFIG["outlayer_api_key"]:
+            bot.account = bot._get_account_id()
+        ok = bot.verify_integrity()
+        sys.exit(0 if ok else 1)
+    elif subcommand == "tokens":
+        # List supported tokens
+        pf = PriceFeed()
+        tokens = pf.list_supported_tokens()
+        print(f"\n── Supported Tokens ({len(tokens)}) ──")
+        for t in tokens:
+            print(f"  {t['symbol']:8s} | {t['blockchain']:6s} | ${t['price']:>12,.4f}")
+        sys.exit(0)
+    elif subcommand == "status":
+        # Read-only status view (no wallet needed)
+        account = args[1] if len(args) > 1 else (CONFIG["near_account"] or "unknown")
+        contract = CONFIG["kv_contract"]
+        print(f"\n── paper-kv Status ──")
+        print(f"  Account:  {account}")
+        print(f"  Contract: {contract}\n")
+
+        state = kv_get(account, contract, "state")
+        positions = kv_get(account, contract, "positions") or []
+        trades = kv_get(account, contract, "trades") or []
+
+        if not state:
+            print("  ❌ No data found for this account")
+            print(f"  URL: {KV_READ_BASE}/v0/latest/{contract}/{account}/state\n")
+            sys.exit(0)
+
+        win_rate = ((state["wins"] / state["totalTrades"]) * 100) if state["totalTrades"] > 0 else 0
+        pnl_emoji = "🟢" if state["totalPnl"] >= 0 else "🔴"
+        print(f"  💰 Balance:    ${state['balance']:.2f}")
+        print(f"  📊 Total PnL:  {pnl_emoji} {state['totalPnl']:+.2f}")
+        print(f"  📈 Trades:     {state['totalTrades']} ({state['wins']}W/{state['losses']}L) — {win_rate:.1f}% win rate")
+        print()
+
+        if positions:
+            print(f"  📂 Open Positions ({len(positions)}):")
+            for p in positions:
+                d = "🟢 LONG" if p["direction"] == "long" else "🔴 SHORT"
+                print(f"    {d} {p['symbol']} {p['leverage']}x | Entry: ${p['entryPrice']:,.2f} | Size: ${p['size']:,.2f} | {p.get('openedAt', '?')}")
+            print()
+
+        recent = trades[-10:][::-1]
+        if recent:
+            print(f"  📜 Recent Trades (last {len(recent)} of {len(trades)}):")
+            for t in recent:
+                e = "🟢" if t["pnl"] >= 0 else "🔴"
+                print(f"    {e} {t['direction'].upper()} {t['symbol']} {t['leverage']}x | ${t['entryPrice']:,.2f}→${t['exitPrice']:,.2f} | {t['pnlPct']:+.2f}% (${t['pnl']:+.2f}) | {t['exitReason']}")
+            print()
+
+        print(f"  🔗 {KV_READ_BASE}/v0/latest/{contract}/{account}/state\n")
+        sys.exit(0)
+    else:
+        # Normal bot mode
+        if not CONFIG["outlayer_api_key"] and not CONFIG["near_account"]:
+            print("❌ Set OUTLAYER_API_KEY or NEAR_ACCOUNT")
+            print("   export OUTLAYER_API_KEY=***  (recommended, gasless)")
+            print("   export NEAR_ACCOUNT=you.near     (fallback, needs local keychain)")
+            sys.exit(1)
+        bot = PaperBot(CONFIG)
+        bot.start()
