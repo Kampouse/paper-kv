@@ -123,7 +123,7 @@ python3 paper_kv.py status [account]  # read-only view of results
 |----------|---------|-------------|
 | `OUTLAYER_API_KEY` | — | OutLayer API key (gasless writes) |
 | `NEAR_ACCOUNT` | auto-detected | Override account (uses OutLayer account by default) |
-| `KV_CONTRACT` | `paper-kv.near` | KV storage contract |
+| `KV_CONTRACT` | `contextual.near` | KV storage contract |
 | `INITIAL_BALANCE` | `10000` | Starting paper balance (USD) |
 | `TRADE_SIZE` | `100` | USD collateral per trade |
 | `DEFAULT_LEVERAGE` | `5` | Leverage multiplier |
@@ -158,7 +158,7 @@ Check pricing at [dashboard.fastnear.com](https://dashboard.fastnear.com).
 Without this, every KV write requires manual approval from the dashboard. With it, the bot runs hands-free.
 
 1. Go to **Policy** in your OutLayer dashboard
-2. Add `paper-kv.near` to the **address whitelist**
+2. Add `contextual.near` to the **address whitelist**
 3. Allow **`call`** as a transaction type
 4. Save
 
@@ -187,10 +187,10 @@ Uses `near contract call-function` under the hood. Requires [near-cli-rs](https:
 python3 paper_kv.py status
 
 # Via curl
-curl https://kv.main.fastnear.com/v0/latest/paper-kv.near/ACCOUNT_ID/state
+curl https://kv.main.fastnear.com/v0/latest/contextual.near/ACCOUNT_ID/state
 
 # Full history
-curl -s -X POST https://kv.main.fastnear.com/v0/history/paper-kv.near/ACCOUNT_ID \
+curl -s -X POST https://kv.main.fastnear.com/v0/history/contextual.near/ACCOUNT_ID \
   -H "Content-Type: application/json" \
   -d '{"key":"trades","asc":true,"limit":100}'
 ```

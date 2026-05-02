@@ -35,7 +35,7 @@ else
 OUTLAYER_API_KEY=$API_KEY
 
 # ── Trading config ──
-KV_CONTRACT=paper-kv.near
+KV_CONTRACT=contextual.near
 INITIAL_BALANCE=10000
 TRADE_SIZE=100
 DEFAULT_LEVERAGE=5

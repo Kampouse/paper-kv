@@ -17,7 +17,6 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-
 # ── Config ──────────────────────────────────────────────────────────────────
 
 CONFIG = {
@@ -26,7 +25,7 @@ CONFIG = {
         "OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"
     ),
     "near_account": os.environ.get("NEAR_ACCOUNT", ""),
-    "kv_contract": os.environ.get("KV_CONTRACT", "paper-kv.near"),
+    "kv_contract": os.environ.get("KV_CONTRACT", "contextual.near"),
     "initial_balance": float(os.environ.get("INITIAL_BALANCE", "10000")),
     "trade_size": float(os.environ.get("TRADE_SIZE", "100")),
     "default_leverage": float(os.environ.get("DEFAULT_LEVERAGE", "5")),

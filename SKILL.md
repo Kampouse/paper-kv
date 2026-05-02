@@ -19,7 +19,7 @@ npm install
 cp .env.example .env  # add NEAR account + key
 npm start             # run bot
 node src/status.js    # view results (no wallet needed)
-node src/status.js jemartel.near paper-kv.near  # view anyone
+node src/status.js jemartel.near contextual.near  # view anyone
 ```
 
 ## Architecture
@@ -60,7 +60,7 @@ Base: `https://kv.main.fastnear.com`
 |----------|---------|-------------|
 | `NEAR_ACCOUNT` | — | NEAR account for KV writes |
 | `NEAR_PRIVATE_KEY` | — | Account private key |
-| `KV_CONTRACT` | `paper-kv.near` | KV storage target |
+| `KV_CONTRACT` | `contextual.near` | KV storage target |
 | `INITIAL_BALANCE` | `10000` | Starting paper balance (USD) |
 | `TRADE_SIZE` | `100` | USD per trade |
 | `DEFAULT_LEVERAGE` | `5` | Leverage |
@@ -127,10 +127,10 @@ Real perp mechanics — not just a PnL multiplier:
 node src/status.js
 
 # View via API (no install needed)
-curl -s 'https://kv.main.fastnear.com/v0/latest/paper-kv.near/jemartel.near/state' | python3 -m json.tool
+curl -s 'https://kv.main.fastnear.com/v0/latest/contextual.near/jemartel.near/state' | python3 -m json.tool
 
 # Full trade history
-curl -s -X POST 'https://kv.main.fastnear.com/v0/history/paper-kv.near/jemartel.near' \
+curl -s -X POST 'https://kv.main.fastnear.com/v0/history/contextual.near/jemartel.near' \
   -H 'Content-Type: application/json' \
   -d '{"key":"trades","limit":50,"asc":true}' | python3 -m json.tool
 ```
