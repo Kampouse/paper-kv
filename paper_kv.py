@@ -211,7 +211,16 @@ class PriceFeed:
             prices[sym] = price
             # Update history cache for momentum calculations
             pts = self.cache.get(sym, [])
-            pts.append({"ts": ts, "price": price})
+            pts.append(
+                {
+                    "ts": ts,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": 0,
+                }
+            )
             cutoff = ts - 4 * 60 * 60 * 1000
             self.cache[sym] = [p for p in pts if p["ts"] >= cutoff]
 
@@ -243,6 +252,49 @@ class PriceFeed:
             for sym, v in sorted(self._token_map.items())
             if v["_price"] > 0
         ]
+
+    def seed_from_binance(self, symbols, lookback_min):
+        """Seed price history with Binance klines so strategies work on first tick."""
+        symbol_map = {
+            "BTC": "BTCUSDT",
+            "ETH": "ETHUSDT",
+            "SOL": "SOLUSDT",
+            "wNEAR": "NEARUSDT",
+            "NEAR": "NEARUSDT",
+        }
+        now_ms = int(time.time() * 1000)
+        start_ms = now_ms - (lookback_min + 5) * 60 * 1000  # +5min buffer
+
+        for sym in symbols:
+            binance_sym = symbol_map.get(sym, f"{sym}USDT")
+            try:
+                url = (
+                    f"https://api.binance.com/api/v3/klines?symbol={binance_sym}"
+                    f"&interval=1m&startTime={start_ms}&endTime={now_ms}&limit=1000"
+                )
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "paper-kv/2.0"}
+                )
+                resp = urllib.request.urlopen(req, timeout=10)
+                raw = json.loads(resp.read())
+                candles = [
+                    {
+                        "ts": k[0],
+                        "open": float(k[1]),
+                        "high": float(k[2]),
+                        "low": float(k[3]),
+                        "close": float(k[4]),
+                        "volume": float(k[5]),
+                    }
+                    for k in raw
+                ]
+                if candles:
+                    self.cache[sym] = candles
+                    print(
+                        f"  📊 Seeded {sym}: {len(candles)} candles ({lookback_min}+ min)"
+                    )
+            except Exception as e:
+                print(f"  ⚠️  Could not seed {sym} from Binance: {e}")
 
 
 # ── System Integrity ────────────────────────────────────────────────────────
@@ -755,9 +807,10 @@ class PaperBot:
 
         signal.signal(signal.SIGINT, shutdown)
 
-        # Seed a second price point so momentum has 2 data points on first tick
-        time.sleep(2)
-        self.price_feed.fetch_prices(self.config["trade_pairs"])
+        # Seed price history with real Binance data so strategies work immediately
+        lookback = self.config.get("momentum_lookback_min", 30)
+        print(f"  ⏳ Seeding {lookback}min of price history from Binance...")
+        self.price_feed.seed_from_binance(self.config["trade_pairs"], lookback)
 
         self.tick()
 
