@@ -6,14 +6,25 @@ NEAR Intents prices for signals, NEAR FastData KV for persistent storage.
 No private keys needed. Uses OutLayer TEE-secured wallet for all writes.
 """
 
-import json, urllib.request, time, os, sys, signal, subprocess, base64, hashlib
+import base64
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.request
 from datetime import datetime, timezone
+
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
 CONFIG = {
     "outlayer_api_key": os.environ.get("OUTLAYER_API_KEY", ""),
-    "outlayer_api": os.environ.get("OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"),
+    "outlayer_api": os.environ.get(
+        "OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"
+    ),
     "near_account": os.environ.get("NEAR_ACCOUNT", ""),
     "kv_contract": os.environ.get("KV_CONTRACT", "paper-kv.near"),
     "initial_balance": float(os.environ.get("INITIAL_BALANCE", "10000")),
@@ -35,6 +46,7 @@ INTENTS_TOKENS_URL = "https://1click.chaindefuser.com/v0/tokens"
 MAX_TRADES_HISTORY = 500
 
 # ── KV Client ───────────────────────────────────────────────────────────────
+
 
 def kv_get(account, contract, key):
     """Read from KV via HTTP (free, no auth)."""
@@ -59,28 +71,32 @@ def kv_get(account, contract, key):
         print(f"  ⚠️  KV read failed ({key}): {e}")
         return None
 
+
 def kv_write_batch(account, contract, data_dict, api_key="", api_base=""):
     """Write to KV via OutLayer gasless contract call, or fallback to near-cli-rs."""
     if api_key:
         return _kv_write_outlayer(contract, data_dict, api_key, api_base)
     return _kv_write_cli(account, contract, data_dict)
 
+
 def _kv_write_outlayer(contract, data_dict, api_key, api_base):
     """Write via OutLayer /wallet/v1/call (gasless, TEE-secured)."""
     try:
-        body = json.dumps({
-            "receiver_id": contract,
-            "method_name": "__fastdata_kv",
-            "args": data_dict,
-            "gas": "300000000000000",
-        }).encode()
+        body = json.dumps(
+            {
+                "receiver_id": contract,
+                "method_name": "__fastdata_kv",
+                "args": data_dict,
+                "gas": "300000000000000",
+            }
+        ).encode()
         req = urllib.request.Request(
             f"{api_base}/wallet/v1/call",
             data=body,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-            }
+            },
         )
         resp = urllib.request.urlopen(req, timeout=30)
         result = json.loads(resp.read())
@@ -102,18 +118,29 @@ def _kv_write_outlayer(contract, data_dict, api_key, api_base):
         print(f"  ⚠️  KV write error: {e}")
         return False
 
+
 def _kv_write_cli(account, contract, data_dict):
     """Fallback: write via near-cli-rs (requires local keychain)."""
     args_b64 = base64.b64encode(json.dumps(data_dict).encode()).decode()
     cmd = [
-        "near", "contract", "call-function", "as-transaction",
-        contract, "__fastdata_kv",
-        "base64-args", args_b64,
-        "prepaid-gas", "300 Tgas",
-        "attached-deposit", "0 NEAR",
-        "sign-as", account,
-        "network-config", "mainnet",
-        "sign-with-keychain", "send",
+        "near",
+        "contract",
+        "call-function",
+        "as-transaction",
+        contract,
+        "__fastdata_kv",
+        "base64-args",
+        args_b64,
+        "prepaid-gas",
+        "300 Tgas",
+        "attached-deposit",
+        "0 NEAR",
+        "sign-as",
+        account,
+        "network-config",
+        "mainnet",
+        "sign-with-keychain",
+        "send",
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -126,36 +153,39 @@ def _kv_write_cli(account, contract, data_dict):
         print(f"  ⚠️  KV write error: {e}")
         return False
 
+
 # ── Price Feed (NEAR Intents) ──────────────────────────────────────────────
 
+
 class PriceFeed:
-    """Price feed from NEAR Intents 1Click API — no API key needed."""
+    """Price feed from NEAR Intents 1Click API — no API key needed.
+
+    Fetches fresh prices every tick so momentum gets real data.
+    Previous bug: _token_map was cached for 5 minutes, returning the same
+    price every tick — momentum always calculated 0% change = "flat".
+    """
 
     def __init__(self):
-        self.cache = {}       # symbol -> [{ts, price}, ...]
-        self._token_map = {}  # symbol -> {assetId, blockchain, decimals}
-        self._last_fetch = 0  # timestamp of last full token list fetch
-        self._token_ttl = 300 # re-fetch token list every 5 min
+        self.cache = {}  # symbol -> [{ts, price}, ...]
+        self._token_map = {}  # symbol -> {assetId, blockchain, decimals, _price}
 
-    def _fetch_token_map(self):
-        """Fetch the full supported token list and build symbol -> price map."""
+    def _fetch_fresh_prices(self):
+        """Fetch fresh prices from NEAR Intents every tick."""
         try:
             req = urllib.request.Request(
-                INTENTS_TOKENS_URL,
-                headers={"User-Agent": "paper-kv/2.0"}
+                INTENTS_TOKENS_URL, headers={"User-Agent": "paper-kv/2.0"}
             )
             resp = urllib.request.urlopen(req, timeout=15)
             tokens = json.loads(resp.read())
-            # Build map: prefer NEAR-native tokens, then first-seen
             for t in tokens:
                 sym = t["symbol"]
                 price = t.get("price", 0)
                 if price <= 0:
-                    continue  # skip zero-price tokens
-                # Prefer NEAR-native tokens over bridged
+                    continue
                 existing = self._token_map.get(sym)
                 if existing and existing.get("_blockchain") == "near":
-                    continue  # keep existing near-native
+                    existing["_price"] = price
+                    continue
                 if existing is None or t["blockchain"] == "near":
                     self._token_map[sym] = {
                         "assetId": t["assetId"],
@@ -163,19 +193,14 @@ class PriceFeed:
                         "decimals": t["decimals"],
                         "_price": price,
                     }
-            self._last_fetch = int(time.time())
         except Exception as e:
-            print(f"  ⚠️  NEAR Intents token fetch failed: {e}")
+            print(f"  ⚠️  NEAR Intents price fetch failed: {e}")
 
     def fetch_prices(self, symbols):
-        """Fetch prices for given symbols from NEAR Intents API."""
+        """Fetch fresh prices for given symbols from NEAR Intents API."""
+        self._fetch_fresh_prices()
+
         prices = {}
-        now = int(time.time())
-
-        # Refresh token list if stale
-        if now - self._last_fetch > self._token_ttl or not self._token_map:
-            self._fetch_token_map()
-
         ts = int(time.time() * 1000)
         for sym in symbols:
             entry = self._token_map.get(sym)
@@ -207,20 +232,22 @@ class PriceFeed:
         return {
             "current": newest,
             "change": change,
-            "dir": "up" if change > 0.2 else "down" if change < -0.2 else "flat",
+            "dir": "up" if change > 0 else "down" if change < 0 else "flat",
         }
 
     def list_supported_tokens(self):
-        """Return list of all supported token symbols with prices."""
+        """Return list of all supported token symbols from NEAR Intents."""
         if not self._token_map:
-            self._fetch_token_map()
+            self._fetch_fresh_prices()
         return [
             {"symbol": sym, "blockchain": v["blockchain"], "price": v["_price"]}
             for sym, v in sorted(self._token_map.items())
             if v["_price"] > 0
         ]
 
+
 # ── System Integrity ────────────────────────────────────────────────────────
+
 
 class IntegrityChecker:
     """Verify system health: API reachability, KV connectivity, price feed, state consistency."""
@@ -246,21 +273,23 @@ class IntegrityChecker:
         # 1. NEAR Intents API reachable
         try:
             req = urllib.request.Request(
-                INTENTS_TOKENS_URL,
-                headers={"User-Agent": "paper-kv/2.0"}
+                INTENTS_TOKENS_URL, headers={"User-Agent": "paper-kv/2.0"}
             )
             resp = urllib.request.urlopen(req, timeout=10)
             tokens = json.loads(resp.read())
             token_count = len(tokens)
-            self._check("NEAR Intents API", token_count > 0,
-                        f"{token_count} tokens available")
+            self._check(
+                "NEAR Intents API", token_count > 0, f"{token_count} tokens available"
+            )
         except Exception as e:
             all_ok = False
             self._check("NEAR Intents API", False, str(e))
 
         # 2. KV read endpoint reachable
         try:
-            url = f"{KV_READ_BASE}/v0/latest/{self.bot.contract}/{self.bot.account}/state"
+            url = (
+                f"{KV_READ_BASE}/v0/latest/{self.bot.contract}/{self.bot.account}/state"
+            )
             req = urllib.request.Request(url, headers={"User-Agent": "paper-kv/2.0"})
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read())
@@ -282,17 +311,25 @@ class IntegrityChecker:
         if found < expected:
             missing = [s for s in self.bot.config["trade_pairs"] if s not in prices]
             all_ok = False
-            self._check("Price Feed", False, f"{found}/{expected} pairs — missing: {', '.join(missing)}")
+            self._check(
+                "Price Feed",
+                False,
+                f"{found}/{expected} pairs — missing: {', '.join(missing)}",
+            )
         else:
             sample = next(iter(prices.items()))
-            self._check("Price Feed", True, f"{found}/{expected} pairs — {sample[0]}: ${sample[1]:,.2f}")
+            self._check(
+                "Price Feed",
+                True,
+                f"{found}/{expected} pairs — {sample[0]}: ${sample[1]:,.2f}",
+            )
 
         # 4. OutLayer API key configured
         if self.bot.api_key:
             try:
                 req = urllib.request.Request(
                     f"{self.bot.api_base}/wallet/v1/balance?token=wrap.near&source=intents",
-                    headers={"Authorization": f"Bearer {self.bot.api_key}"}
+                    headers={"Authorization": f"Bearer {self.bot.api_key}"},
                 )
                 resp = urllib.request.urlopen(req, timeout=10)
                 data = json.loads(resp.read())
@@ -311,11 +348,16 @@ class IntegrityChecker:
         if state["balance"] < 0:
             issues.append(f"negative balance: ${state['balance']:.2f}")
         if state["totalTrades"] != state["wins"] + state["losses"]:
-            issues.append(f"trade count mismatch: {state['totalTrades']} vs {state['wins']+state['losses']}")
+            issues.append(
+                f"trade count mismatch: {state['totalTrades']} vs {state['wins'] + state['losses']}"
+            )
         if state["totalPnl"] < -self.bot.config["initial_balance"] * 2:
             issues.append(f"suspicious PnL: ${state['totalPnl']:.2f}")
-        self._check("State Consistency", len(issues) == 0,
-                    "; ".join(issues) if issues else "clean")
+        self._check(
+            "State Consistency",
+            len(issues) == 0,
+            "; ".join(issues) if issues else "clean",
+        )
 
         # 6. Open positions: validate structure and liquidation math
         pos_issues = []
@@ -330,11 +372,20 @@ class IntegrityChecker:
             expected_liq_short = entry * (1 + 1 / lev - 0.005)
             actual = p.get("liquidationPrice", 0)
             if p["direction"] == "long" and abs(actual - expected_liq_long) > 0.01:
-                pos_issues.append(f"{p['symbol']} long liq mismatch: {actual} vs {expected_liq_long:.2f}")
+                pos_issues.append(
+                    f"{p['symbol']} long liq mismatch: {actual} vs {expected_liq_long:.2f}"
+                )
             elif p["direction"] == "short" and abs(actual - expected_liq_short) > 0.01:
-                pos_issues.append(f"{p['symbol']} short liq mismatch: {actual} vs {expected_liq_short:.2f}")
-        self._check("Position Validation", len(pos_issues) == 0,
-                    "; ".join(pos_issues) if pos_issues else f"{len(self.bot.positions)} positions valid")
+                pos_issues.append(
+                    f"{p['symbol']} short liq mismatch: {actual} vs {expected_liq_short:.2f}"
+                )
+        self._check(
+            "Position Validation",
+            len(pos_issues) == 0,
+            "; ".join(pos_issues)
+            if pos_issues
+            else f"{len(self.bot.positions)} positions valid",
+        )
 
         # 7. KV write roundtrip: write a probe value, read it back, confirm match
         if not self.bot.api_key:
@@ -344,9 +395,11 @@ class IntegrityChecker:
             probe_val = {"ts": int(time.time()), "v": "ok"}
             try:
                 write_ok = kv_write_batch(
-                    self.bot.account, self.bot.contract,
+                    self.bot.account,
+                    self.bot.contract,
                     {probe_key: probe_val},
-                    api_key=self.bot.api_key, api_base=self.bot.api_base,
+                    api_key=self.bot.api_key,
+                    api_base=self.bot.api_base,
                 )
             except Exception as write_err:
                 write_ok = False
@@ -354,21 +407,30 @@ class IntegrityChecker:
 
             if not write_ok:
                 all_ok = False
-                self._check("KV Write Roundtrip", False,
-                            "write failed — wallet may need funding or auto-approve policy (see README)")
+                self._check(
+                    "KV Write Roundtrip",
+                    False,
+                    "write failed — wallet may need funding or auto-approve policy (see README)",
+                )
             else:
                 # Wait for propagation and read back
                 time.sleep(5)
                 read_back = kv_get(self.bot.account, self.bot.contract, probe_key)
                 if read_back is None:
                     all_ok = False
-                    self._check("KV Write Roundtrip", False,
-                                "write succeeded but read returned null — "
-                                "KV propagation may be slow or write was not finalized")
+                    self._check(
+                        "KV Write Roundtrip",
+                        False,
+                        "write succeeded but read returned null — "
+                        "KV propagation may be slow or write was not finalized",
+                    )
                 elif read_back.get("v") != probe_val["v"]:
                     all_ok = False
-                    self._check("KV Write Roundtrip", False,
-                                f"value mismatch: wrote {probe_val}, read {read_back}")
+                    self._check(
+                        "KV Write Roundtrip",
+                        False,
+                        f"value mismatch: wrote {probe_val}, read {read_back}",
+                    )
                 else:
                     self._check("KV Write Roundtrip", True, "write → read verified")
 
@@ -379,7 +441,9 @@ class IntegrityChecker:
         print(f"\n  {emoji} {passed}/{total} checks passed")
         return all_ok
 
+
 # ── Bot ─────────────────────────────────────────────────────────────────────
+
 
 class PaperBot:
     def __init__(self, config):
@@ -408,7 +472,7 @@ class PaperBot:
         try:
             req = urllib.request.Request(
                 f"{self.api_base}/wallet/v1/balance?token=wrap.near&source=intents",
-                headers={"Authorization": f"Bearer {self.api_key}"}
+                headers={"Authorization": f"Bearer {self.api_key}"},
             )
             resp = urllib.request.urlopen(req, timeout=10)
             data = json.loads(resp.read())
@@ -447,7 +511,9 @@ class PaperBot:
         if state:
             self.state = state
             print(f"  Balance:    ${self.state['balance']:.2f}")
-            print(f"  Trades:     {self.state['totalTrades']} ({self.state['wins']}W/{self.state['losses']}L)")
+            print(
+                f"  Trades:     {self.state['totalTrades']} ({self.state['wins']}W/{self.state['losses']}L)"
+            )
             print(f"  Total PnL:  ${self.state['totalPnl']:+.2f}")
         else:
             print(f"  New account — starting with ${self.config['initial_balance']}")
@@ -468,17 +534,26 @@ class PaperBot:
         # Trim trades history to prevent unbounded KV growth
         if len(self.trades) > MAX_TRADES_HISTORY:
             self.trades = self.trades[-MAX_TRADES_HISTORY:]
-        kv_write_batch(self.account, self.contract, {
-            "state": self.state,
-            "positions": self.positions,
-            "trades": self.trades,
-        }, api_key=self.api_key, api_base=self.api_base)
+        kv_write_batch(
+            self.account,
+            self.contract,
+            {
+                "state": self.state,
+                "positions": self.positions,
+                "trades": self.trades,
+            },
+            api_key=self.api_key,
+            api_base=self.api_base,
+        )
         self._dirty = False
 
     def _open_position(self, symbol, direction, price):
         if len(self.positions) >= self.config["max_open_trades"]:
             return None
-        if any(p["symbol"] == symbol and p["direction"] == direction for p in self.positions):
+        if any(
+            p["symbol"] == symbol and p["direction"] == direction
+            for p in self.positions
+        ):
             return None
 
         # Check balance before opening
@@ -498,30 +573,48 @@ class PaperBot:
 
         pos = {
             "id": f"{int(time.time())}-{os.urandom(3).hex()}",
-            "symbol": symbol, "direction": direction,
-            "entryPrice": price, "leverage": leverage,
-            "size": size, "collateral": collateral,
-            "liquidationPrice": liq, "fundingFeesPaid": 0,
+            "symbol": symbol,
+            "direction": direction,
+            "entryPrice": price,
+            "leverage": leverage,
+            "size": size,
+            "collateral": collateral,
+            "liquidationPrice": liq,
+            "fundingFeesPaid": 0,
             "openedAt": datetime.now(timezone.utc).isoformat(),
         }
         self.positions.append(pos)
         self._dirty = True
         d = direction.upper()
-        print(f"  🟢 OPENED {d} {symbol} {leverage}x | ${price:,.2f} → Liq: ${liq:,.2f}")
+        print(
+            f"  🟢 OPENED {d} {symbol} {leverage}x | ${price:,.2f} → Liq: ${liq:,.2f}"
+        )
         return pos
 
     def _close_position(self, pos, price, reason):
         self.positions.remove(pos)
         if pos["direction"] == "long":
-            pnl_pct = ((price - pos["entryPrice"]) / pos["entryPrice"]) * pos["leverage"] * 100
+            pnl_pct = (
+                ((price - pos["entryPrice"]) / pos["entryPrice"])
+                * pos["leverage"]
+                * 100
+            )
         else:
-            pnl_pct = ((pos["entryPrice"] - price) / pos["entryPrice"]) * pos["leverage"] * 100
+            pnl_pct = (
+                ((pos["entryPrice"] - price) / pos["entryPrice"])
+                * pos["leverage"]
+                * 100
+            )
         pnl = pos["collateral"] * (pnl_pct / 100)
 
-        closed = {**pos, "exitPrice": price, "pnl": round(pnl, 2),
-                  "pnlPct": round(pnl_pct, 2),
-                  "closedAt": datetime.now(timezone.utc).isoformat(),
-                  "exitReason": reason}
+        closed = {
+            **pos,
+            "exitPrice": price,
+            "pnl": round(pnl, 2),
+            "pnlPct": round(pnl_pct, 2),
+            "closedAt": datetime.now(timezone.utc).isoformat(),
+            "exitReason": reason,
+        }
 
         self.state["balance"] += pnl
         self.state["totalTrades"] += 1
@@ -531,7 +624,9 @@ class PaperBot:
         self._dirty = True
 
         emoji = "🟢" if pnl >= 0 else "🔴"
-        print(f"  {emoji} CLOSED {pos['direction'].upper()} {pos['symbol']} | ${pos['entryPrice']:,.2f}→${price:,.2f} | {pnl_pct:+.2f}% (${pnl:+.2f}) [{reason}]")
+        print(
+            f"  {emoji} CLOSED {pos['direction'].upper()} {pos['symbol']} | ${pos['entryPrice']:,.2f}→${price:,.2f} | {pnl_pct:+.2f}% (${pnl:+.2f}) [{reason}]"
+        )
 
     def _check_liquidations(self, prices):
         ticks_per = (8 * 3600) / (self.config["check_interval_ms"] / 1000)
@@ -541,46 +636,68 @@ class PaperBot:
             price = prices.get(pos["symbol"])
             if not price:
                 continue
-            pos["fundingFeesPaid"] = pos.get("fundingFeesPaid", 0) + pos["size"] * fr / ticks_per
-            if (pos["direction"] == "long" and price <= pos["liquidationPrice"]) or \
-               (pos["direction"] == "short" and price >= pos["liquidationPrice"]):
+            pos["fundingFeesPaid"] = (
+                pos.get("fundingFeesPaid", 0) + pos["size"] * fr / ticks_per
+            )
+            if (pos["direction"] == "long" and price <= pos["liquidationPrice"]) or (
+                pos["direction"] == "short" and price >= pos["liquidationPrice"]
+            ):
                 to_close.append((pos, price))
         for pos, price in to_close:
             # Guard against double-remove when concurrent liquidations fire
             if pos not in self.positions:
                 continue
             self.positions.remove(pos)
-            closed = {**pos, "exitPrice": price, "pnl": -pos["collateral"],
-                      "pnlPct": -100,
-                      "closedAt": datetime.now(timezone.utc).isoformat(),
-                      "exitReason": "liquidated"}
+            closed = {
+                **pos,
+                "exitPrice": price,
+                "pnl": -pos["collateral"],
+                "pnlPct": -100,
+                "closedAt": datetime.now(timezone.utc).isoformat(),
+                "exitReason": "liquidated",
+            }
             self.state["balance"] -= pos["collateral"]
             self.state["totalTrades"] += 1
             self.state["totalPnl"] -= pos["collateral"]
             self.state["losses"] += 1
             self.trades.append(closed)
             self._dirty = True
-            print(f"  💀 LIQUIDATED {pos['direction'].upper()} {pos['symbol']} {pos['leverage']}x | Lost: ${pos['collateral']}")
+            print(
+                f"  💀 LIQUIDATED {pos['direction'].upper()} {pos['symbol']} {pos['leverage']}x | Lost: ${pos['collateral']}"
+            )
 
     def _run_momentum(self, prices):
         for symbol in self.config["trade_pairs"]:
             price = prices.get(symbol)
             if not price:
                 continue
-            mom = self.price_feed.get_momentum(symbol, self.config["momentum_lookback_min"])
+            mom = self.price_feed.get_momentum(
+                symbol, self.config["momentum_lookback_min"]
+            )
             existing = next((p for p in self.positions if p["symbol"] == symbol), None)
 
             if not existing:
-                if mom["dir"] == "up" and abs(mom["change"]) >= self.config["momentum_threshold_pct"]:
+                if (
+                    mom["dir"] == "up"
+                    and abs(mom["change"]) >= self.config["momentum_threshold_pct"]
+                ):
                     print(f"  📈 {symbol} momentum UP +{mom['change']:.2f}%")
                     self._open_position(symbol, "long", price)
-                elif mom["dir"] == "down" and abs(mom["change"]) >= self.config["momentum_threshold_pct"]:
+                elif (
+                    mom["dir"] == "down"
+                    and abs(mom["change"]) >= self.config["momentum_threshold_pct"]
+                ):
                     print(f"  📉 {symbol} momentum DOWN {mom['change']:.2f}%")
                     self._open_position(symbol, "short", price)
             else:
                 is_long = existing["direction"] == "long"
-                reversed_dir = (is_long and mom["dir"] == "down") or (not is_long and mom["dir"] == "up")
-                if reversed_dir and abs(mom["change"]) >= self.config["momentum_threshold_pct"]:
+                reversed_dir = (is_long and mom["dir"] == "down") or (
+                    not is_long and mom["dir"] == "up"
+                )
+                if (
+                    reversed_dir
+                    and abs(mom["change"]) >= self.config["momentum_threshold_pct"]
+                ):
                     print(f"  🔄 {symbol} reversed ({mom['change']:.2f}%)")
                     self._close_position(existing, price, "momentum_reversal")
 
@@ -606,7 +723,9 @@ class PaperBot:
                 else:
                     u = ((p["entryPrice"] - cp) / p["entryPrice"]) * p["leverage"] * 100
                 emoji = "🟢" if u >= 0 else "🔴"
-                print(f"    {emoji} {p['symbol']} {p['direction'].upper()} {p['leverage']}x | {u:+.2f}%")
+                print(
+                    f"    {emoji} {p['symbol']} {p['direction'].upper()} {p['leverage']}x | {u:+.2f}%"
+                )
 
         b = self.state["balance"]
         t = self.state["totalTrades"]
@@ -627,8 +746,12 @@ class PaperBot:
             self.running = False
             self._dirty = True
             self._save_state()
-            print(f"  Balance: ${self.state['balance']:.2f} | Trades: {self.state['totalTrades']} | PnL: ${self.state['totalPnl']:+.2f}")
-            print(f"  View: {KV_READ_BASE}/v0/latest/{self.contract}/{self.account}/state\n")
+            print(
+                f"  Balance: ${self.state['balance']:.2f} | Trades: {self.state['totalTrades']} | PnL: ${self.state['totalPnl']:+.2f}"
+            )
+            print(
+                f"  View: {KV_READ_BASE}/v0/latest/{self.contract}/{self.account}/state\n"
+            )
             sys.exit(0)
 
         signal.signal(signal.SIGINT, shutdown)
@@ -645,6 +768,7 @@ class PaperBot:
                 self.tick()
             except Exception as err:
                 print(f"  ❌ Tick error: {err}")
+
 
 if __name__ == "__main__":
     args = sys.argv[1:]
@@ -683,18 +807,26 @@ if __name__ == "__main__":
             print(f"  URL: {KV_READ_BASE}/v0/latest/{contract}/{account}/state\n")
             sys.exit(0)
 
-        win_rate = ((state["wins"] / state["totalTrades"]) * 100) if state["totalTrades"] > 0 else 0
+        win_rate = (
+            ((state["wins"] / state["totalTrades"]) * 100)
+            if state["totalTrades"] > 0
+            else 0
+        )
         pnl_emoji = "🟢" if state["totalPnl"] >= 0 else "🔴"
         print(f"  💰 Balance:    ${state['balance']:.2f}")
         print(f"  📊 Total PnL:  {pnl_emoji} {state['totalPnl']:+.2f}")
-        print(f"  📈 Trades:     {state['totalTrades']} ({state['wins']}W/{state['losses']}L) — {win_rate:.1f}% win rate")
+        print(
+            f"  📈 Trades:     {state['totalTrades']} ({state['wins']}W/{state['losses']}L) — {win_rate:.1f}% win rate"
+        )
         print()
 
         if positions:
             print(f"  📂 Open Positions ({len(positions)}):")
             for p in positions:
                 d = "🟢 LONG" if p["direction"] == "long" else "🔴 SHORT"
-                print(f"    {d} {p['symbol']} {p['leverage']}x | Entry: ${p['entryPrice']:,.2f} | Size: ${p['size']:,.2f} | {p.get('openedAt', '?')}")
+                print(
+                    f"    {d} {p['symbol']} {p['leverage']}x | Entry: ${p['entryPrice']:,.2f} | Size: ${p['size']:,.2f} | {p.get('openedAt', '?')}"
+                )
             print()
 
         recent = trades[-10:][::-1]
@@ -702,7 +834,9 @@ if __name__ == "__main__":
             print(f"  📜 Recent Trades (last {len(recent)} of {len(trades)}):")
             for t in recent:
                 e = "🟢" if t["pnl"] >= 0 else "🔴"
-                print(f"    {e} {t['direction'].upper()} {t['symbol']} {t['leverage']}x | ${t['entryPrice']:,.2f}→${t['exitPrice']:,.2f} | {t['pnlPct']:+.2f}% (${t['pnl']:+.2f}) | {t['exitReason']}")
+                print(
+                    f"    {e} {t['direction'].upper()} {t['symbol']} {t['leverage']}x | ${t['entryPrice']:,.2f}→${t['exitPrice']:,.2f} | {t['pnlPct']:+.2f}% (${t['pnl']:+.2f}) | {t['exitReason']}"
+                )
             print()
 
         print(f"  🔗 {KV_READ_BASE}/v0/latest/{contract}/{account}/state\n")
@@ -712,7 +846,9 @@ if __name__ == "__main__":
         if not CONFIG["outlayer_api_key"] and not CONFIG["near_account"]:
             print("❌ Set OUTLAYER_API_KEY or NEAR_ACCOUNT")
             print("   export OUTLAYER_API_KEY=***  (recommended, gasless)")
-            print("   export NEAR_ACCOUNT=you.near     (fallback, needs local keychain)")
+            print(
+                "   export NEAR_ACCOUNT=you.near     (fallback, needs local keychain)"
+            )
             sys.exit(1)
         bot = PaperBot(CONFIG)
         bot.start()
