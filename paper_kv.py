@@ -43,6 +43,7 @@ CONFIG = {
 KV_READ_BASE = "https://kv.main.fastnear.com"
 INTENTS_TOKENS_URL = "https://1click.chaindefuser.com/v0/tokens"
 MAX_TRADES_HISTORY = 500
+LOCAL_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 
 # ── KV Client ───────────────────────────────────────────────────────────────
 
@@ -151,6 +152,27 @@ def _kv_write_cli(account, contract, data_dict):
     except Exception as e:
         print(f"  ⚠️  KV write error: {e}")
         return False
+
+
+def local_state_save(data):
+    """Persist state to local JSON file (always works, no network needed)."""
+    try:
+        with open(LOCAL_STATE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def local_state_load():
+    """Load state from local JSON file."""
+    try:
+        if os.path.exists(LOCAL_STATE_FILE):
+            with open(LOCAL_STATE_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
 
 
 # ── Price Feed (NEAR Intents) ──────────────────────────────────────────────
@@ -554,10 +576,19 @@ class PaperBot:
         print()
 
     def _load_state(self):
-        print("── Loading state from KV ──")
+        print("── Loading state ──")
+        # Try KV first, then local file
         state = kv_get(self.account, self.contract, "state")
         positions = kv_get(self.account, self.contract, "positions")
         trades = kv_get(self.account, self.contract, "trades")
+
+        if not state:
+            local = local_state_load()
+            if local:
+                state = local.get("state")
+                positions = local.get("positions")
+                trades = local.get("trades")
+                print("  📂 Loaded from local state.json")
 
         if state:
             self.state = state
@@ -582,20 +613,29 @@ class PaperBot:
     def _save_state(self):
         if not self._dirty:
             return
-        # Trim trades history to prevent unbounded KV growth
+        # Trim trades history to prevent unbounded growth
         if len(self.trades) > MAX_TRADES_HISTORY:
             self.trades = self.trades[-MAX_TRADES_HISTORY:]
-        kv_write_batch(
-            self.account,
-            self.contract,
-            {
-                "state": self.state,
-                "positions": self.positions,
-                "trades": self.trades,
-            },
-            api_key=self.api_key,
-            api_base=self.api_base,
-        )
+        data = {
+            "state": self.state,
+            "positions": self.positions,
+            "trades": self.trades,
+        }
+        # Always save locally first (guaranteed to work)
+        local_state_save(data)
+        # Try KV (best effort — may fail if wallet unfunded)
+        if self.api_key or self.config.get("near_account"):
+            kv_write_batch(
+                self.account,
+                self.contract,
+                {
+                    "state": self.state,
+                    "positions": self.positions,
+                    "trades": self.trades,
+                },
+                api_key=self.api_key,
+                api_base=self.api_base,
+            )
         self._dirty = False
 
     def _open_position(self, symbol, direction, price):

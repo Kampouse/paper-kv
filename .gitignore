@@ -1,2 +1,5 @@
 node_modules/
 .env
+state.json
+__pycache__/
+*.pyc
