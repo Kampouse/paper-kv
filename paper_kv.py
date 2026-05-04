@@ -234,8 +234,8 @@ class PriceFeed:
         window = [p for p in pts if p["ts"] >= cutoff]
         if len(window) < 2:
             return {"current": 0, "change": 0, "dir": "flat"}
-        oldest = window[0].get("price") or window[0]["close"]
-        newest = window[-1].get("price") or window[-1]["close"]
+        oldest = window[0]["close"]
+        newest = window[-1]["close"]
         change = ((newest - oldest) / oldest) * 100
         return {
             "current": newest,
