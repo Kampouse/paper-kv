@@ -206,21 +206,148 @@ print('  Results in state.json (local only)')
 
 echo ""
 
-# ── Step 4: Go live ──────────────────────────────────────────────────────
+# ── Step 4: Install daemon ───────────────────────────────────────────────
 
-echo -e "${CYAN}── Step 4: Go Live ──${NC}"
+echo -e "${CYAN}── Step 4: Install Daemon ──${NC}"
 echo ""
-echo "  Ready to run live with real prices + on-chain writes."
-echo "  Ctrl+C to stop (state saves automatically)."
+echo "  Install as a background service? (auto-restarts on crash, starts on boot)"
 echo ""
-read -rp "  Start live bot? [y/N] " CONFIRM
+read -rp "  Install daemon? [y/N] " CONFIRM
 
 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
-    echo ""
     load_env .env
-    info "  Starting live bot..."
-    echo ""
-    python3 -u paper-kv live
+    BOT_DIR="$(cd "$SCRIPT_DIR" && pwd)"
+    BOT_CMD="$BOT_DIR/paper-kv"
+    LOG_DIR="$HOME/.paper-kv"
+    mkdir -p "$LOG_DIR"
+
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # ── macOS: launchd ──
+        PLIST="$HOME/Library/LaunchAgents/com.paper-kv.bot.plist"
+        cat > "$PLIST" << PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.paper-kv.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(which python3)</string>
+        <string>-u</string>
+        <string>$BOT_CMD</string>
+        <string>live</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$BOT_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+PLISTEOF
+        # Write env vars
+        while IFS='=' read -r key val; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            val="${val#\"}" ; val="${val%\"}"
+            val="${val#\'}" ; val="${val%\'}"
+            cat >> "$PLIST" << PLISTEOF
+        <key>$key</key>
+        <string>$val</string>
+PLISTEOF
+        done < .env
+        cat >> "$PLIST" << PLISTEOF
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$LOG_DIR/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_DIR/bot.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RestartInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+PLISTEOF
+        launchctl unload "$PLIST" 2>/dev/null || true
+        launchctl load "$PLIST" 2>/dev/null || {
+            warn "launchctl load failed, falling back to nohup"
+            nohup python3 -u "$BOT_CMD" live > "$LOG_DIR/bot.log" 2>&1 &
+            echo "$!" > "$LOG_DIR/bot.pid"
+            ok "Bot started via nohup (PID: $(cat "$LOG_DIR/bot.pid"))"
+            echo "  Log: $LOG_DIR/bot.log"
+            echo "  Stop: kill \$(cat $LOG_DIR/bot.pid)"
+            CONFIRM="nohup"
+        }
+        if [ "$CONFIRM" != "nohup" ]; then
+            ok "Daemon installed (launchd)"
+            echo "  Log: $LOG_DIR/bot.log"
+            echo "  Status: launchctl list | grep paper-kv"
+            echo "  Stop: launchctl unload $PLIST"
+            echo "  Restart: launchctl unload $PLIST && launchctl load $PLIST"
+        fi
+
+    elif [[ "$(uname)" == "Linux" ]]; then
+        # ── Linux: systemd ──
+        SERVICE="/etc/systemd/system/paper-kv-bot.service"
+        PYTHON_PATH="$(which python3)"
+        cat > /tmp/paper-kv-bot.service << SVCEOF
+[Unit]
+Description=paper-kv trading bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$BOT_DIR
+ExecStart=$PYTHON_PATH -u $BOT_CMD live
+Restart=always
+RestartSec=10
+SVCEOF
+        # Write env as Environment= lines
+        ENV_LINE=""
+        while IFS='=' read -r key val; do
+            [[ -z "$key" || "$key" =~ ^# ]] && continue
+            val="${val#\"}" ; val="${val%\"}"
+            val="${val#\'}" ; val="${val%\'}"
+            ENV_LINE="${ENV_LINE}${key}=${val} "
+        done < .env
+        echo "Environment=$ENV_LINE" >> /tmp/paper-kv-bot.service
+        cat >> /tmp/paper-kv-bot.service << SVCEOF
+StandardOutput=append:$LOG_DIR/bot.log
+StandardError=append:$LOG_DIR/bot.log
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+        sudo cp /tmp/paper-kv-bot.service "$SERVICE" 2>/dev/null && \
+        sudo systemctl daemon-reload && \
+        sudo systemctl enable paper-kv-bot && \
+        sudo systemctl start paper-kv-bot || {
+            warn "systemd install failed (no sudo?), falling back to nohup"
+            nohup python3 -u "$BOT_CMD" live > "$LOG_DIR/bot.log" 2>&1 &
+            echo "$!" > "$LOG_DIR/bot.pid"
+            ok "Bot started via nohup (PID: $(cat "$LOG_DIR/bot.pid"))"
+            echo "  Log: $LOG_DIR/bot.log"
+            echo "  Stop: kill \$(cat $LOG_DIR/bot.pid)"
+            CONFIRM="nohup"
+        }
+        if [ "$CONFIRM" != "nohup" ]; then
+            ok "Daemon installed (systemd)"
+            echo "  Log: $LOG_DIR/bot.log"
+            echo "  Status: systemctl status paper-kv-bot"
+            echo "  Stop: sudo systemctl stop paper-kv-bot"
+            echo "  Restart: sudo systemctl restart paper-kv-bot"
+        fi
+
+    else
+        # ── Unknown OS: nohup fallback ──
+        warn "Unknown OS ($(uname)), using nohup"
+        nohup python3 -u "$BOT_CMD" live > "$LOG_DIR/bot.log" 2>&1 &
+        echo "$!" > "$LOG_DIR/bot.pid"
+        ok "Bot started via nohup (PID: $(cat "$LOG_DIR/bot.pid"))"
+        echo "  Log: $LOG_DIR/bot.log"
+        echo "  Stop: kill \$(cat $LOG_DIR/bot.pid)"
+    fi
 else
     info "  Run live anytime: python3 paper-kv live"
 fi
@@ -228,7 +355,9 @@ fi
 echo ""
 echo -e "${CYAN}── Commands ──${NC}"
 echo "  bash setup.sh              # Re-run onboarding"
-echo "  python3 paper-kv replay 7  # Replay + write to chain"
-echo "  python3 paper-kv live      # Run live (Ctrl+C saves state)"
+echo "  python3 paper-kv replay 7  # Replay (local only)"
+echo "  python3 paper-kv live      # Run live (foreground)"
 echo "  python3 paper-kv status    # Check on-chain state"
+echo ""
+echo "  Daemon log: ~/.paper-kv/bot.log"
 echo ""
