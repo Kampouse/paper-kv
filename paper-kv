@@ -31,14 +31,10 @@ if cmd == "replay":
     pairs = CONFIG["pairs"]
     print(f"⏳ Fetching {days}d of {', '.join(pairs)}...")
     candles = PriceFeed.fetch_history(pairs, days, "5m")
-    print(f"── Replaying through engine ──\n")
-
-    def on_save(i, total, ts):
-        from datetime import datetime, timezone
-        e = Engine(CONFIG)  # just for reading state
-        wr = (CONFIG.get("_state",{}).get("wins",0) / max(CONFIG.get("_state",{}).get("totalTrades",1),1)) * 100
-        # Read from the actual engine running
-        pass
+    print(f"── Replaying locally (no chain writes) ──\n")
+    # No KV writes during replay — local only
+    CONFIG["outlayer_api_key"] = ""
+    CONFIG["near_account"] = ""
 
     eng = Engine(CONFIG)
     def on_save(i, total, ts):
@@ -51,7 +47,7 @@ if cmd == "replay":
     e = "🟢" if s["totalPnl"]>=0 else "🔴"
     print(f"\n═══ Done ═══")
     print(f"  💰 ${s['balance']:.2f} | {e} ${s['totalPnl']:+.2f} | {s['totalTrades']} trades ({s['wins']}W/{s['losses']}L) {wr:.1f}%")
-    print(f"  🔗 {KV_READ_BASE}/v0/latest/{CONFIG['kv_contract']}/{CONFIG['near_account']}/state")
+    print(f"  Results saved to state.json (local only)")
 
 elif cmd == "live":
     eng = Engine(CONFIG).load()
