@@ -258,11 +258,10 @@ class Engine:
         # Always save locally first (atomic)
         data = {"state": self.state, "positions": self.positions, "trades": self.trades}
         
-        # Compute Merkle root for tamper-proofing
-        tick_root = build_tick_root(self.state, self.positions, self.trades)
-        if self._tick_roots and tick_root != self._tick_roots[-1]:
-            # Root changed — new tick
-            pass
+        # Compute Merkle root for tamper-proofing (chained with prev root + timestamp)
+        prev_root = self._tick_roots[-1] if self._tick_roots else ""
+        tick_root = build_tick_root(self.state, self.positions, self.trades,
+                                     tick_ts=int(time.time() * 1000), prev_root=prev_root)
         self._tick_roots.append(tick_root)
         data["merkle_root"] = tick_root
         data["tick_count"] = len(self._tick_roots)

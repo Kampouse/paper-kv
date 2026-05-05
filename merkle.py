@@ -64,16 +64,20 @@ class MerkleTree:
         return current == root
 
 
-def build_tick_root(state, positions, trades):
+def build_tick_root(state, positions, trades, tick_ts=None, prev_root=None):
     """Build a Merkle root for a complete tick snapshot.
     
     Tree structure:
-    - leaf 0: state
+    - leaf 0: {state, ts, prev_root}
     - leaf 1: hash of positions list
     - leaf 2..N: individual trades
     """
     items = [
-        state,
+        {
+            "state": state,
+            "ts": tick_ts or 0,
+            "prev_root": prev_root or "",
+        },
         {"positions": positions},
     ] + list(trades)
     
