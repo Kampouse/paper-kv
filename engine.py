@@ -260,14 +260,19 @@ class Engine:
         data = {"state": self.state, "positions": self.positions, "trades": self.trades}
         
         # Compute Merkle root for tamper-proofing (chained with prev root + timestamp)
+        # Use clean state without merkle fields for hashing
+        clean_state = {k: v for k, v in self.state.items() if k not in 
+                       ('merkle_root', 'tick_count', 'last_tick_ts', 'last_prev_root')}
         prev_root = self._tick_roots[-1]["root"] if self._tick_roots else ""
         tick_ts = int(time.time() * 1000)
-        tick_root = build_tick_root(self.state, self.positions, self.trades,
+        tick_root = build_tick_root(clean_state, self.positions, self.trades,
                                      tick_ts=tick_ts, prev_root=prev_root)
         self._tick_roots.append({"root": tick_root, "ts": tick_ts, "prev_root": prev_root})
-        data["merkle_root"] = tick_root
-        data["tick_count"] = len(self._tick_roots)
-        data["tick_roots"] = self._tick_roots[-20:]  # keep last 20 for verification
+        # Store in self.state so it goes to KV
+        self.state["merkle_root"] = tick_root
+        self.state["tick_count"] = len(self._tick_roots)
+        self.state["last_tick_ts"] = tick_ts
+        self.state["last_prev_root"] = prev_root
         
         local_save(data)
         
