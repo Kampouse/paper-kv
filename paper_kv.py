@@ -34,6 +34,7 @@ CONFIG = {
     "strategy": os.environ.get("STRATEGY", "momentum"),
     "momentum_lookback_min": int(os.environ.get("MOMENTUM_LOOKBACK_MINUTES", "30")),
     "momentum_threshold_pct": float(os.environ.get("MOMENTUM_THRESHOLD_PCT", "0.5")),
+    "min_hold_seconds": int(os.environ.get("MIN_HOLD_SECONDS", "300")),  # 5 min minimum hold
     # NEAR Intents symbols — maps to Intents API token symbols
     # Supported: wNEAR, BTC, ETH, SOL, USDC, USDT, and many more
     # See full list: curl https://1click.chaindefuser.com/v0/tokens
@@ -616,10 +617,12 @@ class PaperBot:
         # Trim trades history to prevent unbounded growth
         if len(self.trades) > MAX_TRADES_HISTORY:
             self.trades = self.trades[-MAX_TRADES_HISTORY:]
+        # For KV, only send recent trades to keep payload small
+        kv_trades = self.trades[-20:]
         data = {
             "state": self.state,
             "positions": self.positions,
-            "trades": self.trades,
+            "trades": kv_trades,
         }
         # Always save locally first (guaranteed to work)
         local_state_save(data)
@@ -781,6 +784,13 @@ class PaperBot:
                     print(f"  📉 {symbol} momentum DOWN {mom['change']:.2f}%")
                     self._open_position(symbol, "short", price)
             else:
+                # Enforce minimum hold time to prevent churning
+                opened_ts = datetime.fromisoformat(existing["openedAt"]).timestamp()
+                held_seconds = time.time() - opened_ts
+                min_hold = self.config.get("min_hold_seconds", 300)
+                if held_seconds < min_hold:
+                    continue
+
                 is_long = existing["direction"] == "long"
                 reversed_dir = (is_long and mom["dir"] == "down") or (
                     not is_long and mom["dir"] == "up"
