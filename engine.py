@@ -208,9 +208,10 @@ class Engine:
         self.trades = []
         self._dirty = False
         self._kv_fail_count = 0
-        self._max_kv_fails = 10  # pause KV writes after this many consecutive failures
-        self._strategy_mod = None  # cached import
-        self._tick_roots = []  # Merkle root chain for tamper-proofing
+        self._max_kv_fails = 10
+        self._strategy_mod = None
+        self._tick_roots = []
+        self._last_tick_ts = 0  # timestamp of last price observation
 
     def _now_ms(self):
         return int(time.time() * 1000)
@@ -319,6 +320,8 @@ class Engine:
             "size": collateral * lev, "collateral": collateral,
             "liquidationPrice": liq, "fundingFeesPaid": 0,
             "openedAt": self._now_iso(now_ms),
+            "price_ts": now_ms,
+            "price_source": "binance" if now_ms < self._now_ms() - 60000 else "intents",
         }
         self.positions.append(pos)
         self.state["balance"] -= collateral
@@ -347,6 +350,7 @@ class Engine:
         self.trades.append({
             **pos, "exitPrice": price, "pnl": round(pnl, 2), "pnlPct": round(pnl_pct, 2),
             "closedAt": self._now_iso(now_ms), "exitReason": reason,
+            "close_price_ts": now_ms,
         })
         self._dirty = True
         return pnl
@@ -366,8 +370,10 @@ class Engine:
         return self._strategy_mod
 
     def step(self, prices, now_ms=None):
-        """Run one strategy tick: liquidations first, then strategy."""
+        """Run one strategy tick: liquidations first, then strategy.
+        Stores now_ms as price_ts for trade provenance."""
         now_ms = now_ms or self._now_ms()
+        self._last_tick_ts = now_ms  # for price provenance
 
         # Liquidations (always run, use copy to avoid mutation during iteration)
         for pos in list(self.positions):
