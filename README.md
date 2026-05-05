@@ -38,10 +38,10 @@ The engine is clock-injected — same code path for replay and live. Strategies 
 ## Commands
 
 ```bash
-python3 paper-kv replay 7          # Replay 7 days + write to chain
-STRATEGY=mean_reversion python3 paper-kv replay 7  # Different strategy
-python3 paper-kv live              # Run live (Ctrl+C saves state)
-python3 paper-kv status            # Check on-chain state
+python3 paper-kv.py replay 7          # Replay 7 days + write to chain
+STRATEGY=mean_reversion python3 paper-kv.py replay 7  # Different strategy
+python3 paper-kv.py live              # Run live (Ctrl+C saves state)
+python3 paper-kv.py status            # Check on-chain state
 ```
 
 ## Config
@@ -89,7 +89,7 @@ def step(engine, prices, now_ms):
             engine.close(existing, price, "reason", now_ms)
 ```
 
-Run: `STRATEGY=your_strategy python3 paper-kv replay 7`
+Run: `STRATEGY=your_strategy python3 paper-kv.py replay 7`
 
 ### Engine API
 

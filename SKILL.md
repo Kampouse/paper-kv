@@ -13,16 +13,16 @@ Paper trading bot that writes every trade to NEAR KV (on-chain, verifiable). Str
 cd ~/.openclaw/workspace/paper-kv
 
 # Replay 7 days of real Binance data through the bot
-python3 paper-kv replay 7
+python3 paper-kv.py replay 7
 
 # Replay with different strategy
-STRATEGY=mean_reversion python3 paper-kv replay 7
+STRATEGY=mean_reversion python3 paper-kv.py replay 7
 
 # Run live (fetches prices from NEAR Intents, writes to KV)
-python3 paper-kv live
+python3 paper-kv.py live
 
 # Check on-chain status
-python3 paper-kv status
+python3 paper-kv.py status
 ```
 
 ## Architecture
@@ -94,7 +94,7 @@ def step(engine, prices, now_ms):
         # History: engine.feed.cache[symbol] -> [{ts, close}, ...]
 ```
 
-Then run: `STRATEGY=your_strategy python3 paper-kv replay 7`
+Then run: `STRATEGY=your_strategy python3 paper-kv.py replay 7`
 
 ### Engine API
 

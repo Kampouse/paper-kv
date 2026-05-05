@@ -163,8 +163,8 @@ read -rp "  Install daemon? [y/N] " CONFIRM
 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
     load_env .env
     BOT_DIR="$(cd "$SCRIPT_DIR" && pwd)"
-    BOT_CMD="$BOT_DIR/paper-kv"
-    LOG_DIR="$HOME/.paper-kv"
+    BOT_CMD="$BOT_DIR/paper-kv.py"
+    LOG_DIR="$HOME/.paper-kv.py"
     mkdir -p "$LOG_DIR"
 
     if [[ "$(uname)" == "Darwin" ]]; then
@@ -227,7 +227,7 @@ PLISTEOF
         if [ "$CONFIRM" != "nohup" ]; then
             ok "Daemon installed (launchd)"
             echo "  Log: $LOG_DIR/bot.log"
-            echo "  Status: launchctl list | grep paper-kv"
+            echo "  Status: launchctl list | grep paper-kv.py"
             echo "  Stop: launchctl unload $PLIST"
             echo "  Restart: launchctl unload $PLIST && launchctl load $PLIST"
         fi
@@ -295,15 +295,15 @@ SVCEOF
         echo "  Stop: kill \$(cat $LOG_DIR/bot.pid)"
     fi
 else
-    info "  Run live anytime: python3 paper-kv live"
+    info "  Run live anytime: python3 paper-kv.py live"
 fi
 
 echo ""
 echo -e "${CYAN}── Commands ──${NC}"
 echo "  bash setup.sh              # Re-run onboarding"
-echo "  python3 paper-kv replay 7  # Replay (local only)"
-echo "  python3 paper-kv live      # Run live (foreground)"
-echo "  python3 paper-kv status    # Check on-chain state"
+echo "  python3 paper-kv.py replay 7  # Replay (local only)"
+echo "  python3 paper-kv.py live      # Run live (foreground)"
+echo "  python3 paper-kv.py status    # Check on-chain state"
 echo ""
 echo "  Daemon log: ~/.paper-kv/bot.log"
 echo ""
