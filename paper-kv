@@ -19,6 +19,7 @@ CONFIG = {
     "sl_pct": float(os.environ.get("SL_PCT", "1.5")),
     "min_hold_s": int(os.environ.get("MIN_HOLD_S", "120")),
     "check_interval_s": float(os.environ.get("CHECK_INTERVAL_S", "300")),
+    "poll_interval_s": float(os.environ.get("POLL_INTERVAL_S", "60")),
     "pairs": os.environ.get("PAIRS", "BTC,ETH,SOL,wNEAR").split(","),
     "strategy": os.environ.get("STRATEGY", "momentum"),
 }

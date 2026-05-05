@@ -414,24 +414,55 @@ class Engine:
         return self
 
     def run_live(self, on_tick=None):
-        """Run live. Seeds from Binance, then loops on check_interval_s."""
-        interval = self.config.get("check_interval_s", 60)
+        """Run live. Polls prices every poll_s, runs strategy every tick_s.
+        Price polling is fast (keeps cache fresh for TP/SL checks).
+        Strategy runs less often (avoids overtrading)."""
+        tick_s = self.config.get("check_interval_s", 300)   # strategy every 5min
+        poll_s = self.config.get("poll_interval_s", 60)      # price poll every 1min
         pairs = self.config.get("pairs", ["BTC", "ETH", "SOL", "wNEAR"])
         print(f"  ⏳ Seeding {self.config.get('lookback_min', 15)}min...")
         self.feed.seed_binance(pairs, self.config.get("lookback_min", 15))
+        
+        last_tick = 0
         while True:
             now_ms = int(time.time() * 1000)
+            now_s = now_ms / 1000
+            
+            # Always fetch prices (keeps cache fresh for TP/SL)
             try:
                 prices = self.feed.fetch_live(pairs)
                 if not prices:
-                    log.warning("No prices fetched, skipping tick")
-                    time.sleep(interval)
+                    log.warning("No prices fetched")
+                    time.sleep(poll_s)
                     continue
-                self.step(prices, now_ms)
+            except Exception as e:
+                log.error("Price poll error: %s", e)
+                time.sleep(poll_s)
+                continue
+            
+            # Check liquidations every poll (fast, just price comparison)
+            for pos in list(self.positions):
+                price = prices.get(pos["symbol"])
+                if not price:
+                    continue
+                if (pos["direction"] == "long" and price <= pos["liquidationPrice"]) or \
+                   (pos["direction"] == "short" and price >= pos["liquidationPrice"]):
+                    self.close(pos, price, "liquidated", now_ms)
+                    self._dirty = True
+                    self.save()
+                    if on_tick:
+                        on_tick(prices)
+            
+            # Run full strategy only every tick_s
+            if now_s - last_tick >= tick_s:
+                last_tick = now_s
+                try:
+                    self.step(prices, now_ms)
+                except Exception as e:
+                    log.error("Strategy tick error: %s", e, exc_info=True)
                 self._dirty = True
                 self.save()
                 if on_tick:
                     on_tick(prices)
-            except Exception as e:
-                log.error("Live tick error: %s", e, exc_info=True)
-            time.sleep(interval)
+            
+            time.sleep(poll_s)
