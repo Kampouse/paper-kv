@@ -1,50 +1,42 @@
-"""Momentum strategy — extracted from the original PaperBot._run_momentum()."""
+"""Momentum strategy — open in direction of momentum, close on reversal/TP/SL."""
 
-from strategies.base import BaseStrategy, Signal
+def step(engine, prices, now_ms):
+    c = engine.config
+    lev = c.get("leverage", 5)
+    thr = c.get("threshold", 0.3)
+    lb = c.get("lookback_min", 15)
+    tp = c.get("tp_pct", 2.5)
+    sl = c.get("sl_pct", 1.5)
+    min_hold = c.get("min_hold_s", 120) * 1000
+    pairs = c.get("pairs", ["BTC", "ETH", "SOL", "wNEAR"])
 
+    for sym in pairs:
+        price = prices.get(sym)
+        if not price:
+            continue
+        change, direction = engine.feed.momentum(sym, lb, now_ms)
+        if change is None:
+            continue  # insufficient history
+        existing = next((p for p in engine.positions if p["symbol"] == sym), None)
 
-class Strategy(BaseStrategy):
-    """Open on momentum breakouts, close on reversals."""
-
-    def evaluate(self, prices, positions, price_history, config):
-        signals = []
-        lookback = config.get("momentum_lookback_min", 30)
-        threshold = config.get("momentum_threshold_pct", 0.5)
-
-        for symbol in config["trade_pairs"]:
-            price = prices.get(symbol)
-            if not price:
+        if not existing:
+            if abs(change) >= thr:
+                engine.open(sym, "long" if direction == "up" else "short", price, now_ms)
+        else:
+            from datetime import datetime
+            opened_ms = datetime.fromisoformat(existing["openedAt"]).timestamp() * 1000
+            if now_ms - opened_ms < min_hold:
                 continue
-
-            pts = price_history.get(symbol, [])
-            now_ts = pts[-1]["ts"] if pts else 0
-            mom = self.momentum_of(price_history, symbol, lookback, now_ts)
-
-            existing = next((p for p in positions if p["symbol"] == symbol), None)
-
-            if not existing:
-                if mom["dir"] == "up" and abs(mom["change"]) >= threshold:
-                    signals.append(
-                        Signal.open_long(
-                            symbol,
-                            reason=f"momentum UP +{mom['change']:.2f}%",
-                        )
-                    )
-                elif mom["dir"] == "down" and abs(mom["change"]) >= threshold:
-                    signals.append(
-                        Signal.open_short(
-                            symbol,
-                            reason=f"momentum DOWN {mom['change']:.2f}%",
-                        )
-                    )
-            else:
-                is_long = existing["direction"] == "long"
-                reversed_dir = (is_long and mom["dir"] == "down") or (
-                    not is_long and mom["dir"] == "up"
-                )
-                if reversed_dir and abs(mom["change"]) >= threshold:
-                    signals.append(
-                        Signal.close_position(symbol, reason="momentum_reversal")
-                    )
-
-        return signals
+            is_long = existing["direction"] == "long"
+            pnl_pct = ((price - existing["entryPrice"]) / existing["entryPrice"] * lev * 100 if is_long
+                       else (existing["entryPrice"] - price) / existing["entryPrice"] * lev * 100)
+            reason = None
+            if pnl_pct >= tp:
+                reason = "take_profit"
+            elif pnl_pct <= -sl:
+                reason = "stop_loss"
+            elif (is_long and direction == "down" and abs(change) >= thr) or \
+                 (not is_long and direction == "up" and abs(change) >= thr):
+                reason = "momentum_reversal"
+            if reason:
+                engine.close(existing, price, reason, now_ms)

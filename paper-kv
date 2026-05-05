@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""paper-kv CLI — thin wrapper over engine.py"""
+
+import json, os, sys, signal
+from engine import Engine, PriceFeed, KV_READ_BASE, kv_get
+
+CONFIG = {
+    "outlayer_api_key": os.environ.get("OUTLAYER_API_KEY", "wk_169d276885fe7283581ab753cf2d77169843ab37f920e209ae7895c7e87e790b"),
+    "outlayer_api": os.environ.get("OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"),
+    "near_account": os.environ.get("NEAR_ACCOUNT", "5c571cf253c3edb672df980cc56078f2c455b972cc01ac34af51e95967ba6edb"),
+    "kv_contract": os.environ.get("KV_CONTRACT", "contextual.near"),
+    "initial_balance": float(os.environ.get("INITIAL_BALANCE", "10000")),
+    "trade_size": float(os.environ.get("TRADE_SIZE", "100")),
+    "leverage": float(os.environ.get("LEVERAGE", "5")),
+    "max_open": int(os.environ.get("MAX_OPEN", "10")),
+    "lookback_min": int(os.environ.get("LOOKBACK_MIN", "15")),
+    "threshold": float(os.environ.get("THRESHOLD", "0.3")),
+    "tp_pct": float(os.environ.get("TP_PCT", "2.5")),
+    "sl_pct": float(os.environ.get("SL_PCT", "1.5")),
+    "min_hold_s": int(os.environ.get("MIN_HOLD_S", "120")),
+    "check_interval_s": float(os.environ.get("CHECK_INTERVAL_S", "60")),
+    "pairs": os.environ.get("PAIRS", "BTC,ETH,SOL,wNEAR").split(","),
+    "strategy": os.environ.get("STRATEGY", "momentum"),
+}
+
+args = sys.argv[1:]
+cmd = args[0] if args else "live"
+
+if cmd == "replay":
+    days = int(args[1]) if len(args) > 1 else 7
+    pairs = CONFIG["pairs"]
+    print(f"⏳ Fetching {days}d of {', '.join(pairs)}...")
+    candles = PriceFeed.fetch_history(pairs, days, "5m")
+    print(f"── Replaying through engine ──\n")
+
+    def on_save(i, total, ts):
+        from datetime import datetime, timezone
+        e = Engine(CONFIG)  # just for reading state
+        wr = (CONFIG.get("_state",{}).get("wins",0) / max(CONFIG.get("_state",{}).get("totalTrades",1),1)) * 100
+        # Read from the actual engine running
+        pass
+
+    eng = Engine(CONFIG)
+    def on_save(i, total, ts):
+        ts_str = __import__("datetime").datetime.fromtimestamp(ts/1000, tz=__import__("datetime").timezone.utc).strftime("%Y-%m-%d %H:%M")
+        s = eng.state; wr = (s["wins"]/s["totalTrades"]*100) if s["totalTrades"]>0 else 0
+        print(f"  📊 {ts_str} | {i}/{total} | ${s['balance']:.2f} | {s['totalTrades']} trades ({wr:.0f}% WR) | PnL: ${s['totalPnl']:+.2f}")
+
+    eng.replay(candles, save_every=200, on_save=on_save)
+    s = eng.state; wr = (s["wins"]/s["totalTrades"]*100) if s["totalTrades"]>0 else 0
+    e = "🟢" if s["totalPnl"]>=0 else "🔴"
+    print(f"\n═══ Done ═══")
+    print(f"  💰 ${s['balance']:.2f} | {e} ${s['totalPnl']:+.2f} | {s['totalTrades']} trades ({s['wins']}W/{s['losses']}L) {wr:.1f}%")
+    print(f"  🔗 {KV_READ_BASE}/v0/latest/{CONFIG['kv_contract']}/{CONFIG['near_account']}/state")
+
+elif cmd == "live":
+    eng = Engine(CONFIG).load()
+    print(f"⚡ paper-kv live | {eng.account} | {CONFIG['leverage']}x | TP {CONFIG['tp_pct']}% SL {CONFIG['sl_pct']}%")
+    print(f"  Pairs: {', '.join(CONFIG['pairs'])}")
+    signal.signal(signal.SIGINT, lambda s,f: (setattr(eng,'_dirty',True), eng.save(), sys.exit(0)))
+    eng.run_live(on_tick=lambda p: print(f"  💰 {eng.state['balance']:.2f} | {len(eng.positions)} open | {eng.state['totalTrades']} trades"))
+
+elif cmd == "status":
+    acc = args[1] if len(args)>1 else CONFIG["near_account"]; c = CONFIG["kv_contract"]
+    state = kv_get(acc, c, "state"); pos = kv_get(acc, c, "positions") or []; tr = kv_get(acc, c, "trades") or []
+    if not state: print("  ❌ No data"); sys.exit(0)
+    wr = (state["wins"]/state["totalTrades"]*100) if state["totalTrades"]>0 else 0
+    e = "🟢" if state["totalPnl"]>=0 else "🔴"
+    print(f"\n  💰 ${state['balance']:.2f} | {e} ${state['totalPnl']:+.2f} | {state['totalTrades']} trades ({state['wins']}W/{state['losses']}L) {wr:.1f}%")
+    if pos: print(f"  📂 {len(pos)} open")
+    if tr:
+        print(f"  📜 Last 5:")
+        for t in tr[-5:][::-1]:
+            e2 = "🟢" if t["pnl"]>=0 else "🔴"
+            print(f"    {e2} {t['direction'].upper()} {t['symbol']} {t['leverage']}x | ${t['entryPrice']:,.2f}→${t['exitPrice']:,.2f} | {t['pnlPct']:+.2f}% | {t['exitReason']}")
+    print(f"\n  🔗 {KV_READ_BASE}/v0/latest/{c}/{acc}/state\n")
+
+else:
+    print("Usage: paper-kv [replay DAYS|live|status]")
