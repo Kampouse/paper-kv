@@ -26,7 +26,7 @@ CONFIG = {
     ),
     "near_account": os.environ.get("NEAR_ACCOUNT", ""),
     "kv_contract": os.environ.get("KV_CONTRACT", "contextual.near"),
-    "initial_balance": float(os.environ.get("INITIAL_BALANCE", "10000")),
+    "initial_balance": float(os.environ.get("INITIAL_BALANCE", "1000")),
     "trade_size": float(os.environ.get("TRADE_SIZE", "100")),
     "default_leverage": float(os.environ.get("DEFAULT_LEVERAGE", "5")),
     "max_open_trades": int(os.environ.get("MAX_OPEN_TRADES", "5")),
