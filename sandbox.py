@@ -111,7 +111,7 @@ class PriceFeed:
         return pts[-1] if pts else None
 
     def history(self, sym, lookback_ms=None):
-        """Get price history for a symbol. lookback_ms = how far back."""
+        """Get price history for a symbol. lookback_ms = how far back (None = all)."""
         pts = self.cache.get(sym, [])
         if lookback_ms and pts:
             now = pts[-1]["ts"]
