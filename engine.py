@@ -11,6 +11,8 @@ import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone
 
+from merkle import build_tick_root
+
 log = logging.getLogger("paper-kv")
 
 KV_READ_BASE = "https://kv.main.fastnear.com"
@@ -208,6 +210,7 @@ class Engine:
         self._kv_fail_count = 0
         self._max_kv_fails = 10  # pause KV writes after this many consecutive failures
         self._strategy_mod = None  # cached import
+        self._tick_roots = []  # Merkle root chain for tamper-proofing
 
     def _now_ms(self):
         return int(time.time() * 1000)
@@ -254,6 +257,16 @@ class Engine:
         
         # Always save locally first (atomic)
         data = {"state": self.state, "positions": self.positions, "trades": self.trades}
+        
+        # Compute Merkle root for tamper-proofing
+        tick_root = build_tick_root(self.state, self.positions, self.trades)
+        if self._tick_roots and tick_root != self._tick_roots[-1]:
+            # Root changed — new tick
+            pass
+        self._tick_roots.append(tick_root)
+        data["merkle_root"] = tick_root
+        data["tick_count"] = len(self._tick_roots)
+        
         local_save(data)
         
         # Circuit breaker: skip KV if too many consecutive failures
