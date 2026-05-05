@@ -40,7 +40,7 @@ paper-kv/
 
 ## On-Chain Data
 
-- **Account:** `REDACTED_ACCOUNT`
+- **Account:** Set via `NEAR_ACCOUNT` env var (OutLayer wallet account)
 - **Contract:** `contextual.near`
 - **OutLayer key:** `wk_169d...` (in `.env`)
 - **KV URL:** `https://kv.main.fastnear.com/v0/latest/contextual.near/{account}/state`
