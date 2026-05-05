@@ -5,7 +5,7 @@ import json, os, sys, signal
 from engine import Engine, PriceFeed, KV_READ_BASE, kv_get
 
 CONFIG = {
-    "outlayer_api_key": os.environ.get("OUTLAYER_API_KEY", "REDACTED_KEY"),
+    "outlayer_api_key": os.environ.get("OUTLAYER_API_KEY", ""),
     "outlayer_api": os.environ.get("OUTLAYER_API_BASE", "https://api.outlayer.fastnear.com"),
     "near_account": os.environ.get("NEAR_ACCOUNT", "REDACTED_ACCOUNT"),
     "kv_contract": os.environ.get("KV_CONTRACT", "contextual.near"),
