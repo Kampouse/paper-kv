@@ -650,7 +650,7 @@ class PaperBot:
         ):
             return None
 
-        # Check balance before opening
+        # Check available balance
         if self.config["trade_size"] > self.state["balance"]:
             print(f"  ⏸️  Insufficient balance (${self.state['balance']:.2f})")
             return None
@@ -678,6 +678,7 @@ class PaperBot:
             "openedAt": datetime.now(timezone.utc).isoformat(),
         }
         self.positions.append(pos)
+        self.state["balance"] -= collateral  # Lock up collateral
         self._dirty = True
         d = direction.upper()
         print(
@@ -710,7 +711,7 @@ class PaperBot:
             "exitReason": reason,
         }
 
-        self.state["balance"] += pnl
+        self.state["balance"] += pos["collateral"] + pnl  # Return collateral + profit/loss
         self.state["totalTrades"] += 1
         self.state["totalPnl"] += pnl
         self.state["wins" if pnl >= 0 else "losses"] += 1
