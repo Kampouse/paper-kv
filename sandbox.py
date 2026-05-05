@@ -345,11 +345,11 @@ class Engine:
                         self.feed.push(sym, ts, c)
                         break
             self.check_liquidations(prices, ts)
+            self._dirty = True  # auto-save every tick
             try: agent_tick(self, prices, ts)
             except Exception as e: log.error("Agent tick %d: %s", i, e, exc_info=True)
-            if (i + 1) % save_every == 0 or i == len(all_ts) - 1:
-                self._dirty = True; self.save(now_ms=ts)
-                if on_save: on_save(i + 1, len(all_ts), ts)
+            self.save(now_ms=ts)
+            if on_save: on_save(i + 1, len(all_ts), ts)
         # Close remaining
         for pos in list(self.positions):
             last = candles_by_sym.get(pos["symbol"], [{}])[-1].get("close", pos["entryPrice"])
@@ -378,6 +378,9 @@ class Engine:
                 except Exception as e: log.error("Agent tick: %s", e, exc_info=True)
                 self._dirty = True; self.save(now_ms=now_ms)
                 if on_tick: on_tick(prices)
+            elif self._dirty:
+                # Auto-save even between agent ticks (e.g. after liquidation)
+                self.save(now_ms=now_ms)
             time.sleep(poll_s)
 
 # ── Agent loader ────────────────────────────────────────────────────────────
