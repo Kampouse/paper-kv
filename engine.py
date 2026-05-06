@@ -445,8 +445,8 @@ class Engine:
         tick_s = self.config.get("check_interval_s", 300)   # strategy every 5min
         poll_s = self.config.get("poll_interval_s", 60)      # price poll every 1min
         pairs = self.config.get("pairs", ["BTC", "ETH", "SOL", "wNEAR"])
-        print(f"  ⏳ Seeding {self.config.get('lookback_min', 15)}min...")
-        self.feed.seed_binance(pairs, self.config.get("lookback_min", 15))
+        print(f"  ⏳ Seeding 60min history...")
+        self.feed.seed_binance(pairs, 60)
         
         last_tick = 0
         while True:
